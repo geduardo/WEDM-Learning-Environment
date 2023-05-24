@@ -2,37 +2,31 @@ import numpy as np
 from collections import deque
 
 class Environment:
-    """A class representing a simulated environment for wire erosion."""
+    """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
 
-    
-
-    def __init__(self, time_between_movements, max_step_size, min_step_size, wire_distance_increment, spark_ignition_time, k_param, sparks_50, beta, h, v_u, renewal_time, target_distance):
+    def __init__(self, time_between_movements, max_step_size, min_step_size, workpiece_distance_increment, spark_ignition_time, T_timeout, T_rest, h, v_u, renewal_time, target_distance, start_position_wire=0, start_position_workpiece=100):
         """
         Initialize the environment with the given parameters.
 
         :param time_between_movements: Time between motor movements.
         :param max_step_size: Maximum step size for motor movements.
         :param min_step_size: Minimum step size for motor movements.
-        :param wire_distance_increment: Wire distance increment after each spark.
+        :param workpiece_distance_increment: Workpiece distance increment after each spark.
         :param spark_ignition_time: Time it takes from origination to extinction of a spark.
-        :param k_param: Parameter of the exponential distribution.
-        :param sparks_50: Number of sparks that cause the wire to have a probability of 0.5 of breaking.
-        :param beta: Parameter of the sigmoid function that models the probability of wire break.
         :param h: Height of the workpiece.
         :param v_u: Voltage applied to the wire.
         :param renewal_time: Time for the wire to be renewed.
         :param target_distance: Target distance for the wire to reach.
+        :param T_timeout: Time down after wire break.
+        :param T_rest: Time down after end of spark.
         """
-        self.workpiece_position = 3/k_param # we start with 3 times the mean of the exponential distribution of the ignition delay time pdf
-        self.wire_position = 0
+        self.workpiece_position = start_position_workpiece
+        self.wire_position = start_position_wire
         self.time_between_movements = time_between_movements
         self.max_step_size = max_step_size
         self.min_step_size = min_step_size
-        self.wire_distance_increment = wire_distance_increment
+        self.workpiece_distance_increment = workpiece_distance_increment
         self.spark_ignition_time = spark_ignition_time
-        self.beta = beta
-        self.sparks_50 = sparks_50
-        self.k_param = k_param
         self.h = h
         self.v_u = v_u
         self.renewal_time = renewal_time
@@ -41,6 +35,8 @@ class Environment:
         self.sparks_list = deque([0] * self.renewal_time, maxlen=self.renewal_time)
         self.is_wire_broken = False
         self.target_distance = target_distance
+        self.T_timeout = T_timeout
+        self.T_rest = T_rest
         
     def _get_lambda(self, wire_position, workpiece_position):
         """
@@ -53,7 +49,16 @@ class Environment:
         """
         d = wire_position - workpiece_position
         return np.log(2)/(0.48*d*d -3.69*d + 14.05) # Empirical interpolation of the lambda parameter
-
+    
+    def _get_conditional_probability_of_sparking_at_given_microsecond(self, lambda_param, time_from_voltage_rise):
+        """ Calculate the conditional probability of sparking at a given microsecond,
+        given that it has not sparked yet since the last voltage rise."""
+        
+        # In the case of the exponential distribution, the conditional
+        # probability is just lambda
+        return lambda_param
+    
+    
     def _sample_ignition_delay_time(self, wire_position, workpiece_position):
         """
         Sample ignition delay time based on the distance between the wire and the workpiece.
@@ -68,15 +73,8 @@ class Environment:
 
     def _sample_wire_break(self):
         """
-        Determine if the wire breaks based on the accumulated sparks and their probabilities.
-
-        Updates the `is_wire_broken` attribute.
+        TODO
         """
-        sparks_in_wire = sum((1 - (len(self.sparks_list) - (i + 1)) / (len(self.sparks_list))) * x for i, x in enumerate(self.sparks_list))
-        self.is_wire_broken = False
-        p = 1 / (1 + np.exp(-self.beta * (sparks_in_wire - self.sparks_50)))
-        if np.random.uniform() < p:
-            self.is_wire_broken = True
 
     def _move_motor(self, action):
         """
@@ -113,7 +111,7 @@ class Environment:
             self.sparks_list.append(1)
             self.sparks_list.extend([0] * (self.spark_ignition_time - 1))
 
-            self.workpiece_position += self.wire_distance_increment
+            self.workpiece_position += self.workpiece_distance_increment
 
     def step(self, action):
         """
@@ -151,7 +149,7 @@ class Environment:
         Get the current state of the environment.
 
         :return: A dictionary containing the workpiece_position, wire_position, time_counter,
-                 time_counter_global, and is_wire_broken values.
+                 time_counter_global, spark_list and is_wire_broken values of the environment.
         """
         return {
             "workpiece_position": self.workpiece_position,
