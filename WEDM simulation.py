@@ -7,7 +7,7 @@ from collections import deque
 class Environment:
     """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
 
-    def __init__(self, time_between_movements, min_step_size, workpiece_distance_increment, spark_ignition_time, T_timeout, T_rest, h, v_u, renewal_time, target_distance, start_position_wire=0, start_position_workpiece=100):
+    def __init__(self, time_between_movements, min_step_size, workpiece_distance_increment, crater_diameter, spark_ignition_time, T_timeout, T_rest, piece_height, unwinding_speed, target_distance, start_position_wire=0, start_position_workpiece=100):
         """
         Initialize the environment with the given parameters.
 
@@ -15,32 +15,50 @@ class Environment:
         :param min_step_size: Minimum step size for motor movements.
         :param workpiece_distance_increment: Workpiece distance increment after each spark.
         :param spark_ignition_time: Time it takes from origination to extinction of a spark.
-        :param h: Height of the workpiece.
-        :param v_u: Voltage applied to the wire.
-        :param renewal_time: Time for the wire to be renewed.
-        :param target_distance: Target distance for the wire to reach.
         :param T_timeout: Time down after wire break.
         :param T_rest: Time down after end of spark.
+        :param piece_height: Height of the workpiece.
+        :param unwinding_speed: Speed at which the wire unwinds.
+        :param target_distance: Target distance for the wire to reach.
+        :param start_position_wire: The initial position of the wire. Default is 0.
+        :param start_position_workpiece: The initial position of the workpiece. Default is 100.
         """
+        
+        # Constants for the environment
         self.start_position_workpiece = start_position_workpiece
         self.start_position_wire = start_position_wire
+        self.time_between_movements = time_between_movements        
+        self.min_step_size = min_step_size        
+        self.workpiece_distance_increment = workpiece_distance_increment        
+        self.piece_height = piece_height
+        self.unwinding_speed = unwinding_speed
+        self.renewal_time = int(self.piece_height/self.unwinding_speed)
+        self.T_timeout = T_timeout
+        self.T_rest = T_rest
+        self.target_distance = target_distance
+        self.crater_diameter = crater_diameter
+        
+        # Physical variables for the simulation
         self.workpiece_position = start_position_workpiece
         self.wire_position = start_position_wire
-        self.time_between_movements = time_between_movements
-        self.min_step_size = min_step_size
-        self.workpiece_distance_increment = workpiece_distance_increment
         self.spark_ignition_time = spark_ignition_time
-        self.h = h
-        self.v_u = v_u
-        self.renewal_time = renewal_time
+        
+        # Auxiliary variables for the simulation
         self.time_counter = 0
         self.time_counter_global = 0
         self.sparks_list = deque([0] * self.renewal_time, maxlen=self.renewal_time)
         self.is_wire_broken = False
-        self.target_distance = target_distance
-        self.T_timeout = T_timeout
-        self.T_rest = T_rest
         self.spark_counter = 0
+        self.display = None
+    
+    def set_display(self, display):
+        """
+        Set the display for the environment.
+
+        :param display: The display to be set.
+        """
+        self.display = display
+        
     def _get_lambda(self, wire_position, workpiece_position):
         """
         Calculate the lambda parameter of the exponential distribution based
@@ -69,6 +87,40 @@ class Environment:
         # proportional to the number of sparks on the wire
         return number_of_sparks_on_wire/100000
 
+    def _generate_sparks(self):
+        """
+        Generate sparks in the wire based on the conditional probability of
+        sparking at a given microsecond.
+        """
+        # sample spark
+        if np.random.rand() < self._get_spark_conditional_probability(self._get_lambda(self.wire_position, self.workpiece_position), self.time_counter):
+            self.sparks_list.append(1)
+            self.spark_counter += 1
+            self.workpiece_position += self.workpiece_distance_increment
+            # Print ignition delay time
+            print("Ignition delay time: ", self.time_counter)
+            self.time_counter = 0
+            self.time_counter_global += 1
+            
+            # Check if the wire is broken
+            self.is_wire_broken = np.random.rand() < self._get_wire_break_conditional_probability(sum(self.sparks_list))
+            if self.is_wire_broken:
+                print("Wire broken!")
+            
+            if self.wire_position >= self.workpiece_position:
+                print("Collision!")
+             
+            # After a spark, the voltage is down for T_rest microseconds
+            for _ in range(self.T_rest):
+                self.time_counter_global += 1
+                self.sparks_list.append(0)
+        else:
+            self.sparks_list.append(0)
+            self.time_counter += 1
+            self.time_counter_global += 1
+        
+        self.display.draw()
+            
     def _move_motor(self, action):
         """
         Move the motor in the desired direction and number of steps.
@@ -76,10 +128,22 @@ class Environment:
         :param action: Tuple containing the direction and number of steps.
         """
         direction, number_of_steps = action
+        
+        # Move the motor in the desired direction and number of steps
         for _ in range(number_of_steps):
-            self.wire_position += direction * self.min_step_size
+            self.wire_position = self.wire_position + direction * self.min_step_size
+            # Generate during motor movement (we assume that the motor is always
+            # moving at 1 micrometer/microsecond) #CHECK THIS #TODO
             self._generate_sparks()
+        
+    def is_done(self):
+        """
+        Check if the environment has reached a termination condition.
 
+        :return: True if the wire is broken or the target distance has been reached, False otherwise.
+        """
+        return self.is_wire_broken or self.workpiece_position >= self.target_distance or self.wire_position >= self.workpiece_position
+    
     def step(self, action):
         """
         Execute a step in the environment based on the given action.
@@ -87,23 +151,22 @@ class Environment:
         :param action: Tuple containing the direction and number of steps.
         :raises ValueError: If the action is not a tuple.
         """
+        # Reset the spark counter
         self.spark_counter = 0
+        # Check if the action is valid
         if not isinstance(action, tuple):
             raise ValueError("The action must be a tuple.")
+        # Move the motor
         self._move_motor(action)
+        
+        # After the motor movement, sample sparks each microsecond until the
+        # next motor movement
         for _ in range(self.time_between_movements):
             self._generate_sparks()
             if self.is_done():
                 break
         print("Sparks in step: ", self.spark_counter)
 
-    def is_done(self):
-        """
-        Check if the environment has reached a termination condition.
-
-        :return: True if the wire is broken or the target distance has been reached, False otherwise.
-        """
-        return self.is_wire_broken or self.workpiece_position >= self.target_distance
 
     def reset(self):
         """
@@ -133,73 +196,31 @@ class Environment:
         }
         
 
-class PygameEnvironment(Environment):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.scale_factor = 1  # scale from micrometers to pixels
+class Display:
+    def __init__(self, environment):
+        self.environment = environment
         self.win_width = 800
         self.win_height = 600
-        self.wire_width = 10
+        self.wire_width = 10 # wire width in pixels
         self.wire_height = self.win_height
-        self.workpiece_width = self.win_width - self.workpiece_position * self.scale_factor
+        self.workpiece_width = self.win_width - self.environment.workpiece_position
         self.workpiece_height = 100
-        self.sparks_visual = []  # store the visual representation of sparks
         self.init_pygame()
 
     def init_pygame(self):
         pygame.init()
         self.screen = pygame.display.set_mode((self.win_width, self.win_height))
-        pygame.display.set_caption('Wire Erosion Environment')
+        pygame.display.set_caption('Wire EDM Simulation')
 
     def draw(self):
         self.screen.fill((0, 0, 0))
-        wire_rect = pygame.Rect(self.wire_position * self.scale_factor, 0, self.wire_width, self.wire_height)
+        wire_rect = pygame.Rect(self.environment.wire_position, 0, self.wire_width, self.wire_height)
         pygame.draw.rect(self.screen, (200, 100, 0), wire_rect)
 
-        workpiece_rect = pygame.Rect(self.workpiece_position * self.scale_factor, self.win_height/2, self.workpiece_width, self.workpiece_height)
+        workpiece_rect = pygame.Rect(self.environment.workpiece_position, self.win_height/2, self.workpiece_width, self.workpiece_height)
         pygame.draw.rect(self.screen, (200, 200, 200), workpiece_rect)
-
-        for spark in self.sparks_visual:
-            spark_brightness = spark[2]
-            if spark_brightness > 0:
-                # the spark position in x is just in between the wire and the
-                # workpiece
-                spark_position_x = spark[0]
-                # the postion in the y axis is stored when the spark is generated 
-                spark_position_y = spark[1]
-                pygame.draw.line(self.screen, (255, 255, 0, spark_brightness), (self.wire_position * self.scale_factor + self.wire_width/2, spark_position_y), (self.workpiece_position * self.scale_factor, spark_position_y), 2)
-                spark[2] -= 10  # decrease the spark's brightness
-
-        pygame.display.flip()
+        pygame.display.update()
         
-    
-    def _generate_sparks(self):
-        """
-        Generate sparks in the wire based on the conditional probability of
-        sparking at a given microsecond.
-        """
-        # sample spark
-        if np.random.rand() < self._get_spark_conditional_probability(self._get_lambda(self.wire_position, self.workpiece_position), self.time_counter):
-            spark_position_x = (self.wire_position * self.scale_factor  + self.workpiece_position * self.scale_factor)/2 + self.wire_width/2
-            spark_position_y = np.random.randint(self.win_height/2, self.win_height/2 + self.workpiece_height)
-            spark_position = [spark_position_x, spark_position_y, 255]  # append the position of the spark and its initial brightness
-            self.sparks_visual.append(spark_position)
-            self.sparks_list.append(1)
-            self.spark_counter += 1
-            self.workpiece_position += self.workpiece_distance_increment
-            self.time_counter = 0
-            self.time_counter_global += 1
-            self.is_wire_broken = np.random.rand() < self._get_wire_break_conditional_probability(sum(self.sparks_list))
-            if self.is_wire_broken:
-                print("Wire broken!")
-            for _ in range(self.T_rest):
-                self.time_counter_global += 1
-                self.sparks_list.append(0)
-        else:
-            self.sparks_list.append(0)
-            self.time_counter += 1
-            self.time_counter_global += 1
-
 
     def handle_events(self):
         for event in pygame.event.get():
@@ -208,40 +229,39 @@ class PygameEnvironment(Environment):
                 sys.exit()
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_LEFT:
-                    self.step((-1, 1))
+                    self.environment.step((-1, 1))
                 elif event.key == pygame.K_RIGHT:
-                    self.step((1, 1))
-
-    def _move_motor(self, action):
-        """
-        Move the motor in the desired direction and number of steps.
-
-        :param action: Tuple containing the direction and number of steps.
-        """
-        direction, number_of_steps = action
-        for _ in range(number_of_steps):
-            self.wire_position = self.wire_position + direction * self.min_step_size
-            self._generate_sparks()
-        print("Distance to workpiece: ", -self.wire_position + self.workpiece_position)
-        
+                    self.environment.step((1, 1))
+                    
     def run(self):
-        while not self.is_done():
-            self.draw()
+        while not self.environment.is_done():
             self.handle_events()
-            pygame.time.delay(100)  # Adding delay for easier observation
 
             
-            
-time_between_movements = 1000  # microseconds
-min_step_size = 1         # micrometers
-workpiece_distance_increment = 0.1  # micrometers
-spark_ignition_time = 1     # microseconds
-T_timeout = 1               # microseconds
-T_rest = 1                  # microseconds
-h = 100                     # micrometers
-v_u = 5                     # Volts
-renewal_time = 100000           # microseconds
-target_distance = 1000      # micrometers
+def main():
 
-env = PygameEnvironment(time_between_movements, min_step_size, workpiece_distance_increment, spark_ignition_time, T_timeout, T_rest, h, v_u, renewal_time, target_distance)
-env.run()
+    time_between_movements = 10000  # in microseconds
+    min_step_size = 1  # in micrometers
+    workpiece_distance_increment = 0.1  # in micrometers
+    crater_diameter = 0.1  # in micrometers
+    spark_ignition_time = 50  # in microseconds
+    T_timeout = 5000  # in microseconds
+    T_rest = 10  # in microseconds
+    piece_height = 20000  # in micrometers
+    unwinding_speed = 5  # in micrometers per microsecond
+    target_distance = 10000  # in micrometers
+    start_position_wire = 90  # in micrometers
+    start_position_workpiece = 100  # in micrometers
+
+    # Initializing Environment
+    env = Environment(time_between_movements, min_step_size, workpiece_distance_increment, crater_diameter,
+                    spark_ignition_time, T_timeout, T_rest, piece_height, unwinding_speed, target_distance,
+                    start_position_wire, start_position_workpiece)
+
+    # Initializing Display and setting it for the Environment
+    display = Display(env)
+    env.set_display(display)
+    display.run()
+
+if __name__ == '__main__':
+    main()
