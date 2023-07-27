@@ -9,7 +9,10 @@ import pygame
 class Environment:
     """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
 
-    def __init__(self, time_between_movements, min_step_size, workpiece_distance_increment, crater_diameter, spark_ignition_time, heat_dissipation_time, T_timeout, T_rest, piece_height, unwinding_speed, target_distance, start_position_wire=0, start_position_workpiece=100):
+    def __init__(self, time_between_movements, min_step_size, workpiece_distance_increment, 
+                 crater_diameter, spark_ignition_time, heat_dissipation_time, T_timeout, T_rest, 
+                 piece_height, unwinding_speed, target_distance, start_position_wire=0, 
+                 start_position_workpiece=100):
         """
         Initialize the environment with the given parameters.
 
@@ -28,10 +31,11 @@ class Environment:
         """
         
         # Constants for the environment
+        
         self.start_position_workpiece = start_position_workpiece
         self.start_position_wire = start_position_wire
-        self.time_between_movements = time_between_movements        
-        self.min_step_size = min_step_size        
+        self.time_between_movements = time_between_movements   
+        self.min_step_size = min_step_size    
         self.workpiece_distance_increment = workpiece_distance_increment        
         self.piece_height = piece_height
         self.unwinding_speed = unwinding_speed
@@ -40,17 +44,19 @@ class Environment:
         self.T_rest = T_rest
         self.target_distance = target_distance
         self.crater_diameter = crater_diameter
+        self.spark_ignition_time = spark_ignition_time
+        self.heat_dissipation_time = heat_dissipation_time # Time that the heat of a spark is in the wire
+        
         
         # Physical variables for the simulation
+        
         self.workpiece_position = start_position_workpiece
         self.wire_position = start_position_wire
-        self.spark_ignition_time = spark_ignition_time
-        self.heat_dissipation_time = heat_dissipation_time
-        
+
         # Auxiliary variables for the simulation
+        
         self.time_counter = 0
         self.time_counter_global = 0
-        self.sparks_list = deque([0] * self.renewal_time, maxlen=self.renewal_time)
         self.sparks_positions_list = deque([-1] * self.heat_dissipation_time, maxlen=self.heat_dissipation_time)
         self.is_wire_broken = False
         self.is_wire_colliding = False
@@ -62,6 +68,7 @@ class Environment:
         self.t2 = 1
         self.history = []
         self.FPS = -1
+        
     def set_display(self, display):
         """
         Set the display for the environment.
@@ -102,8 +109,7 @@ class Environment:
         relevant_sparks = sorted(spark for spark in self.sparks_positions_list if spark != -1)
 
         # count the number of sparks within range
-        sparks_in_range = sum(abs(relevant_sparks[i] - relevant_sparks[i+1]) < self.crater_diameter 
-                            for i in range(len(relevant_sparks) - 1))
+        sparks_in_range = sum(abs(relevant_sparks[i] - relevant_sparks[i+1]) < self.crater_diameter for i in range(len(relevant_sparks) - 1))
         
         # check if wire breaks
         if sparks_in_range >= 3:
@@ -119,10 +125,12 @@ class Environment:
         sparking at a given microsecond.
         """
         # sample spark
+        
         if np.random.rand() < self._get_spark_conditional_probability(self._get_lambda(self.wire_position, self.workpiece_position), self.time_counter):
-            self.sparks_list.append(1)
+
             self.spark_counter += 1
             self.workpiece_position += self.workpiece_distance_increment
+            
             # self.display.spark_sound.play()
             spark_y = np.random.randint(0, self.piece_height)
             self.sparks_positions_list.append(spark_y)
@@ -150,10 +158,8 @@ class Environment:
             # After a spark, the voltage is down for T_rest + self.spark_ignition_time microseconds
             for _ in range(self.T_rest + self.spark_ignition_time):
                 self.time_counter_global += 1
-                self.sparks_list.append(0)
                 self.sparks_positions_list.append(-1) # -1 means no spark
         else:
-            self.sparks_list.append(0)
             self.sparks_positions_list.append(-1) # -1 means no spark
             self.time_counter += 1
             self.time_counter_global += 1
@@ -221,7 +227,6 @@ class Environment:
         self.wire_position = self.start_position_wire
         self.time_counter = 0
         self.time_counter_global = 0
-        self.sparks_list = deque([0] * self.renewal_time, maxlen=self.renewal_time)
         self.is_wire_broken = False
         
     def get_environment_state(self):
@@ -234,7 +239,6 @@ class Environment:
         return {
             "workpiece_position": self.workpiece_position,
             "wire_position": self.wire_position,
-            "sparks_list": self.sparks_list,
             "time_counter": self.time_counter,
             "time_counter_global": self.time_counter_global,
             "is_wire_broken": self.is_wire_broken
