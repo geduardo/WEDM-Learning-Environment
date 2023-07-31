@@ -11,7 +11,7 @@ class Environment:
 
     def __init__(self, time_between_movements, min_step_size, workpiece_distance_increment, 
                  crater_diameter, spark_ignition_time, heat_dissipation_time, T_timeout, T_rest, 
-                 piece_height, unwinding_speed, target_distance, start_position_wire=0, 
+                 piece_height, unwinding_speed, target_distance, start_position_wire=99, 
                  start_position_workpiece=100):
         """
         Initialize the environment with the given parameters.
@@ -110,12 +110,13 @@ class Environment:
 
         # count the number of sparks within range
         sparks_in_range = sum(abs(relevant_sparks[i] - relevant_sparks[i+1]) < self.crater_diameter for i in range(len(relevant_sparks) - 1))
-        
+
         # check if wire breaks
         if sparks_in_range >= 3:
             return 1
         else:
             return 0
+        
                 
         
 
@@ -135,14 +136,12 @@ class Environment:
             spark_y = np.random.randint(0, self.piece_height)
             self.sparks_positions_list.append(spark_y)
             self.sparks.append(((self.wire_position + self.workpiece_position)/2 , spark_y, 2000))  # Each spark bright lasts for 2000 microseconds
-        
+            
             self.time_counter = 0
             self.time_counter_global += 1
             
             # Check if the wire is broken
             self.is_wire_broken = np.random.rand() < self._get_wire_break_conditional_probability()
-            print(self.sparks_positions_list)
-            
             if self.is_wire_broken:
                 print("Wire broken!")
             
@@ -160,10 +159,11 @@ class Environment:
                 self.time_counter_global += 1
                 self.sparks_positions_list.append(-1) # -1 means no spark
         else:
+            
             self.sparks_positions_list.append(-1) # -1 means no spark
             self.time_counter += 1
             self.time_counter_global += 1
-
+        
         
         if self.time_counter_global % 1667 == 0 and self.display is not None: # at 1667 microseconds, a frame is drawn. If fps§ = 60, then 1s real time = 0.1 s (simulation time)
             self.display.clock.tick(60) # make sure the game runs at 60 fps
@@ -171,7 +171,20 @@ class Environment:
             self.display.draw()
             self.FPS = 1/(self.t2 - self.t1)
             self.t1 = time.time()
+            
         self.sparks = [(x, y, lifespan-1) for x, y, lifespan in self.sparks if lifespan > 1]
+        
+        
+    def unwind_wire(self):
+        """
+        Unwind the wire by the unwinding speed. This affects the position of the sparks in the wire.
+        """       
+        # add delta to all the spark positions
+        for i in range(len(self.sparks_positions_list)):
+            if self.sparks_positions_list[i] != -1:
+                self.sparks_positions_list[i] += self.unwinding_speed 
+            if self.sparks_positions_list[i] > self.piece_height:
+                self.sparks_positions_list[i] = -1
             
     def _move_motor(self, action):
         """
@@ -185,8 +198,9 @@ class Environment:
         for _ in range(number_of_steps):
             self.wire_position = self.wire_position + direction * self.min_step_size
             # Generate during motor movement (we assume that the motor is always
-            # moving at 1 micrometer/microsecond) #CHECK THIS #TODO
+            # moving at 1 micrometer/microsecond) #CHECK THIS # TODO
             self._generate_sparks()
+            self.unwind_wire()
         
     def is_done(self):
         """
@@ -216,6 +230,7 @@ class Environment:
         # next motor movement
         for _ in range(self.time_between_movements):
             self._generate_sparks()
+            self.unwind_wire()
             if self.is_done():
                 break
 
@@ -248,13 +263,13 @@ class Environment:
 class Display:
     def __init__(self, environment):
         self.environment = environment
-        self.win_width = 1000
-        self.win_height = 800
+        self.win_width = 400
+        self.win_height = 400
         self.wire_width = 100 # wire width in pixels
         self.wire_height = self.win_height
         self.workpiece_width = self.win_width - self.environment.workpiece_position
         self.init_pygame()
-        self.spark_sound = pygame.mixer.Sound('spark.wav')
+
     def init_pygame(self):
         pygame.init()
         self.screen = pygame.display.set_mode((self.win_width, self.win_height))
@@ -265,7 +280,7 @@ class Display:
     def draw(self):
         self.screen.fill((50, 50, 50))
         # note that the wire position is the position of the right end of the wire
-        wire_rect = pygame.Rect(self.environment.wire_position- self.wire_width, 0, self.wire_width, self.wire_height)
+        wire_rect = pygame.Rect(self.environment.wire_position - self.wire_width, 0, self.wire_width, self.wire_height)
         pygame.draw.rect(self.screen, (200, 100, 0), wire_rect)
 
         workpiece_rect = pygame.Rect(self.environment.workpiece_position, self.win_height/2 - self.environment.piece_height/2, self.workpiece_width, self.environment.piece_height)
@@ -335,10 +350,10 @@ def main():
     T_timeout = 5000  # in microseconds
     T_rest = 10  # in microseconds
     piece_height = 400  # in micrometers
-    unwinding_speed = 1000  # in micrometers per microsecond
+    unwinding_speed = 0.17  # in micrometers per microsecond
     target_distance = 1500  # in micrometers
-    start_position_wire = 20  # in micrometers
-    start_position_workpiece = 300  # in micrometers
+    start_position_wire = 90  # in micrometers
+    start_position_workpiece = 100  # in micrometers
     # Initializing Environment
     env = Environment(time_between_movements, min_step_size, workpiece_distance_increment, crater_diameter,
                     spark_ignition_time, heat_dissipation_time, T_timeout, T_rest, piece_height, unwinding_speed, target_distance,
