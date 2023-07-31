@@ -176,8 +176,13 @@ class Display:
 
     def run(self):
         while not self.environment.is_done():
+            for event in pygame.event.get():  # this line will get all events in the event queue
+                if event.type == pygame.QUIT:  # if the event is a QUIT event, then you will stop the game loop
+                    pygame.quit()
+                    sys.exit()
             self.PID_actor()
             self.environment.history.append(self.environment.get_environment_state())
+
 
 def main():
     time_between_movements = 1000

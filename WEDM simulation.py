@@ -117,8 +117,6 @@ class Environment:
         else:
             return 0
         
-                
-        
 
     def _generate_sparks(self):
         """
@@ -143,6 +141,7 @@ class Environment:
             # Check if the wire is broken
             self.is_wire_broken = np.random.rand() < self._get_wire_break_conditional_probability()
             if self.is_wire_broken:
+                print(self.sparks_positions_list)
                 print("Wire broken!")
             
             self.is_wire_colliding = self.wire_position >= self.workpiece_position
@@ -158,6 +157,8 @@ class Environment:
             for _ in range(self.T_rest + self.spark_ignition_time):
                 self.time_counter_global += 1
                 self.sparks_positions_list.append(-1) # -1 means no spark
+
+
         else:
             
             self.sparks_positions_list.append(-1) # -1 means no spark
@@ -263,8 +264,8 @@ class Environment:
 class Display:
     def __init__(self, environment):
         self.environment = environment
-        self.win_width = 400
-        self.win_height = 400
+        self.win_width = 1280
+        self.win_height = 720
         self.wire_width = 100 # wire width in pixels
         self.wire_height = self.win_height
         self.workpiece_width = self.win_width - self.environment.workpiece_position
@@ -284,6 +285,8 @@ class Display:
         pygame.draw.rect(self.screen, (200, 100, 0), wire_rect)
 
         workpiece_rect = pygame.Rect(self.environment.workpiece_position, self.win_height/2 - self.environment.piece_height/2, self.workpiece_width, self.environment.piece_height)
+        
+        
         pygame.draw.rect(self.screen, (150, 150, 150), workpiece_rect)
         
         for x, y, _ in self.environment.sparks:
@@ -311,6 +314,17 @@ class Display:
         position = (0, 0)  # upper-left corner
          # draw text on the screen
         self.screen.blit(text, position)
+        
+        #now the same but with the distance between the wire and the workpiece
+        text2 = font.render('Distance: ' + str(int(self.environment.workpiece_position - self.environment.wire_position)), True, (255, 255, 255))
+        position2 = (0, 20)
+        self.screen.blit(text2, position2)
+        
+        #now the same but with the number of sparks in the wire
+        text3 = font.render('Sparks: ' + str(self.environment.heat_dissipation_time - self.environment.sparks_positions_list.count(-1)), True, (255, 255, 255))
+        position3 = (0, 40)
+        self.screen.blit(text3, position3)
+        
 
         pygame.display.update()
 
@@ -329,27 +343,31 @@ class Display:
     #         # simulation with no movement
     
     def PID_actor(self):
-        if self.environment.spark_counter < 3:
+        if self.environment.spark_counter < 5:
             self.environment.step((1, 1))
         else:
             self.environment.step((-1, 1))
                     
     def run(self):
         while not self.environment.is_done():
-            # self.human_actor()
+            for event in pygame.event.get():  
+                if event.type == pygame.QUIT: 
+                    pygame.quit()
+                    sys.exit()
             self.PID_actor()
             self.environment.history.append(self.environment.get_environment_state())
             
 def main():
     time_between_movements = 1000  # in microseconds
     min_step_size = 1 # in micrometers
-    workpiece_distance_increment = 0.05  # in micrometers
-    crater_diameter = 50  # in micrometers
+    piece_height = 1000  # in micrometers
+    crater_depth = 2.5 # in micrometers
+    crater_diameter = 100  # in micrometers
+    workpiece_distance_increment = crater_depth * crater_diameter / piece_height  # in micrometers
     spark_ignition_time = 3  # in microseconds
     heat_dissipation_time = 100 # in microseconds
     T_timeout = 5000  # in microseconds
     T_rest = 10  # in microseconds
-    piece_height = 400  # in micrometers
     unwinding_speed = 0.17  # in micrometers per microsecond
     target_distance = 1500  # in micrometers
     start_position_wire = 90  # in micrometers
