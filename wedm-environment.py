@@ -11,7 +11,7 @@ class WireEdmEnv(gym.Env):
     """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
     
     def __init__(self, render_mode = None, servo_interval = 1000, min_step_size = 1, max_steps = 1, crater_diameter = 100, 
-                 crater_depth = 5,pulse_duration = 2 , dissipation_time = 100, break_timeout = 60*10**6, rest_time = 10,
+                 crater_depth = 5,pulse_duration = 2 , dissipation_time = 200, break_timeout = 60*10**6, rest_time = 10,
                  workpiece_height = 10000, unwinding_speed = 0.17, target_distance =  10000, 
                  wire_start=50, workpiece_start=100, max_time_steps = 1000):
         
@@ -54,15 +54,15 @@ class WireEdmEnv(gym.Env):
             ## Technology constants
         self.unwinding_speed = unwinding_speed
         self.pulse_duration = pulse_duration
-        
             ## Derived constants
         self.workpiece_distance_increment = self.crater_depth * self.crater_diameter / self.workpiece_height
-        
         # Physical variables
         
         self.workpiece_position = workpiece_start
         self.wire_position = wire_start
-        self.sparks_positions = deque([-1] * self.dissipation_time, maxlen=self.dissipation_time)
+        self.sparks_positions = np.full(self.dissipation_time, -1, dtype=np.float64) # Initialize with -1
+        self.current_spark_index = 0
+
 
         # Auxiliary variables for the simulation
         self.time_counter = 0
@@ -110,6 +110,10 @@ class WireEdmEnv(gym.Env):
         self.window = None
         self.clock = None
         
+    def _add_spark(self, position):
+        self.sparks_positions[self.current_spark_index] = position
+        self.current_spark_index = (self.current_spark_index + 1) % len(self.sparks_positions)
+
     def _get_obs(self):
         """
         Get the current observation of the environment.
@@ -147,18 +151,16 @@ class WireEdmEnv(gym.Env):
         return lambda_param
 
     def _get_wire_break_conditional_probability(self):
-        """ Calculate the conditional probability of the wire breaking after a
-        spark."""
-
-        # If there are 5 sparks at a distance less than 100 micrometers, the
-        # the wire breaks. We calculate the distance between the sparks
-        # in self.sparks_positions
+        """
+        Calculate the conditional probability of the wire breaking after a spark.
+        """
 
         # filter out -1 and sort the positions
-        relevant_sparks = sorted(spark for spark in self.sparks_positions if spark != -1)
+        relevant_sparks = np.sort(self.sparks_positions[self.sparks_positions != -1])
 
-        # count the number of sparks within range
-        sparks_in_range = sum(abs(relevant_sparks[i] - relevant_sparks[i+1]) < self.heat_affected_zone for i in range(len(relevant_sparks) - 1))
+        # calculate the distance between the sparks and find how many are within range
+        distances = np.diff(relevant_sparks)
+        sparks_in_range = np.sum(distances < self.heat_affected_zone)
 
         # check if wire breaks
         if sparks_in_range >= 2:
@@ -185,7 +187,7 @@ class WireEdmEnv(gym.Env):
             
             spark_x = (self.wire_position + self.workpiece_position)/2
             
-            self.sparks_positions.append(spark_y)
+            self._add_spark(spark_y)
             
             self.sparks_frame.append((spark_x , spark_y))  # Add spark to the list of sparks in the current frame
             
@@ -207,24 +209,22 @@ class WireEdmEnv(gym.Env):
             # After a spark, the voltage is down for rest_time + self.pulse_duration microseconds
             for _ in range(self.rest_time + self.pulse_duration):
                 self.time_counter_global += 1
-                self.sparks_positions.append(-1) # -1 means no spark
-
+                self._add_spark(-1) # -1 means no spark
 
         else:
             self.time_counter += 1
             self.time_counter_global += 1
-            self.sparks_positions.append(-1) # -1 means no spark
+            self._add_spark(-1) # -1 means no spark
         
     def _unwind_wire(self):
         """
         Unwind the wire by the unwinding speed. This affects the position of the sparks in the wire.
-        """       
+        """
         # add delta to all the spark positions
-        for i in range(len(self.sparks_positions)):
-            if self.sparks_positions[i] != -1:
-                self.sparks_positions[i] += self.unwinding_speed 
-            if self.sparks_positions[i] > self.workpiece_height:
-                self.sparks_positions[i] = -1
+        self.sparks_positions[self.sparks_positions != -1] += self.unwinding_speed
+
+        # replace positions greater than workpiece_height with -1
+        self.sparks_positions[self.sparks_positions > self.workpiece_height] = -1
             
     def _move_motor(self, motor_step):
         """
@@ -308,7 +308,8 @@ class WireEdmEnv(gym.Env):
         self.time_counter_global = 0
         self.spark_counter = 0
         self.time_step_count= 0
-        self.sparks_positions = deque([-1] * self.dissipation_time, maxlen=self.dissipation_time)
+        self.sparks_positions = np.full(self.dissipation_time, -1, dtype=np.float64)
+        self.current_spark_index = 0
         self.sparks_frame = []
         self.is_wire_broken = False
         self.is_wire_colliding = False
@@ -424,7 +425,7 @@ class Display:
                 sys.exit()
             
 class Q_learning_actor:
-    def __init__(self, env, learning_rate = 0.01, initial_epsilon = 1, epsilon_decay = 0.99, min_epsilon = 0.01, gamma = 0.99):
+    def __init__(self, env, learning_rate = 0.005, initial_epsilon = 1, epsilon_decay = 0.993, min_epsilon = 0.01, gamma = 0.99):
         self.learning_rate = learning_rate
         self.env = env
         self.epsilon = initial_epsilon
@@ -474,9 +475,9 @@ def main():
     # display = Display(env)
     # env.set_display(display)
     
-    N_episodes = 2000
+    N_episodes = 10
     agent = Q_learning_actor(env)
-    agent = PID_actor(env)
+    # agent = PID_actor(env)
     reward_list = []
     for episode in range(N_episodes):
         obs, info = env.reset()
@@ -493,28 +494,35 @@ def main():
             obs = next_obs
         reward_list.append(total_reward)
 
-        # for i in sorted(agent.q_table):
-        #     motion = np.argmax(agent.q_table[i])
-        #     if motion > env.max_steps:
-        #         motion_str = "Right"
-        #     if motion < env.max_steps:
-        #         motion_str = "Left"
-        #     if motion == env.max_steps:
-        #         motion_str = "Still"
-        #     print(i, motion_str)
+        for i in sorted(agent.q_table):
+            motion = np.argmax(agent.q_table[i])
+            if motion > env.max_steps:
+                motion_str = "Right"
+            if motion < env.max_steps:
+                motion_str = "Left"
+            if motion == env.max_steps:
+                motion_str = "Still"
+            print(i, motion_str)
         
         print ("Episode: ", episode, "Total reward: ", total_reward)
         agent.decay_epsilon()
+        print("Epsilon: ", agent.epsilon)
         
-    # save reward list as a csv file
-    np.savetxt("reward_list_PID_3.csv", reward_list, delimiter=",")
+    # # save reward list as a csv file
+    # np.savetxt("reward_list_PID_Q_Learning.csv", reward_list, delimiter=",")
     
-    # save q_table as a pickle file
-    import pickle
-    with open("q_table_PID_QL.pickle", "wb") as f:
-        pickle.dump(agent.q_table, f)
-        f.close()
-    
+    # # save q_table as a pickle file
+    # import pickle
+    # with open("q_table_PID_QL.pickle", "wb") as f:
+    #     pickle.dump(agent.q_table, f)
+    #     f.close()
+
+import cProfile
+import pstats
 if __name__ == '__main__':
-    
+    profiler = cProfile.Profile()
+    profiler.enable()
     main()
+    profiler.disable()
+    stats = pstats.Stats(profiler).sort_stats('tottime')
+    stats.print_stats()
