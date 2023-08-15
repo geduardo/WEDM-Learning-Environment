@@ -1,7 +1,9 @@
 import numpy as np
 import pygame
+
 import sys
 from collections import deque
+
 import gymnasium as gym
 from gymnasium import spaces
 
@@ -11,7 +13,7 @@ class WireEdmEnv(gym.Env):
     """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
     
     def __init__(self, render_mode = None, servo_interval = 1000, min_step_size = 1, max_steps = 1, crater_diameter = 100, 
-                 crater_depth = 5,pulse_duration = 2 , dissipation_time = 200, break_timeout = 60*10**6, rest_time = 10,
+                 crater_depth = 5,pulse_duration = 2 , dissipation_time = 100, break_timeout = 60*10**6, rest_time = 10,
                  workpiece_height = 10000, unwinding_speed = 0.17, target_distance =  10000, 
                  wire_start=50, workpiece_start=100, max_time_steps = 1000):
         
@@ -54,15 +56,13 @@ class WireEdmEnv(gym.Env):
             ## Technology constants
         self.unwinding_speed = unwinding_speed
         self.pulse_duration = pulse_duration
-            ## Derived constants
+            ## Derived
         self.workpiece_distance_increment = self.crater_depth * self.crater_diameter / self.workpiece_height
         # Physical variables
         
         self.workpiece_position = workpiece_start
         self.wire_position = wire_start
-        self.sparks_positions = np.full(self.dissipation_time, -1, dtype=np.float64) # Initialize with -1
-        self.current_spark_index = 0
-
+        self.sparks = []
 
         # Auxiliary variables for the simulation
         self.time_counter = 0
@@ -70,8 +70,6 @@ class WireEdmEnv(gym.Env):
         self.is_wire_broken = False
         self.is_wire_colliding = False
         self.is_target_distance_reached = False
-        self.spark_counter = 0
-        self.display = None
         self.sparks_frame = []
         self.initial_gap = self.workpiece_start - self.wire_start
         self.average_gap = deque([0]*self.initial_gap, maxlen=1000)
@@ -82,6 +80,18 @@ class WireEdmEnv(gym.Env):
         self.FPS = -1
         self.clock = None
         self.t1 = pygame.time.get_ticks()
+        self.lambda_cache = {}  # create a cache to avoid recalculating the lambda parameter
+        
+        # Pygame related attributes
+        
+        self.window_width = 1280
+        self.window_height = 720
+        self.wire_width = 300 # wire width in pixels
+        self.wire_height = self.window_height
+        self.workpiece_width = self.window_width - self.workpiece_position
+        self.vertical_downscale = 0.05
+        self.workpiece_height_render = self.workpiece_height * self.vertical_downscale
+        
         # Gymasium variables
         
         # We have 2*max_steps + 1 possible actions. This can be encoded as a discrete space with 2*max_steps + 1 elements.
@@ -111,8 +121,7 @@ class WireEdmEnv(gym.Env):
         self.clock = None
         
     def _add_spark(self, position):
-        self.sparks_positions[self.current_spark_index] = position
-        self.current_spark_index = (self.current_spark_index + 1) % len(self.sparks_positions)
+        self.sparks.append((position, self.dissipation_time))
 
     def _get_obs(self):
         """
@@ -121,27 +130,29 @@ class WireEdmEnv(gym.Env):
         :return: The current observation of the environment.
         """
         return self.spark_counter
-        
-    def set_display(self, display):
-        """
-        Set the display for the environment.
 
-        :param display: The display to be set.
-        """
-        self.display = display
         
     def _get_lambda(self, wire_position, workpiece_position):
         """
         Calculate the lambda parameter of the exponential distribution based
         on empirical interpolation.
 
-        :param wire_position: Wire position.
-        :param workpiece_position: Workpiece position.
+        :param wire_position: Wire position. type: int
+        :param workpiece_position: Workpiece position. type: int
         :return: Lambda parameter.
         """
         d = wire_position - workpiece_position
-        return np.log(2)/(0.48*d*d -3.69*d + 14.05) # Empirical interpolation of the lambda parameter
-    
+
+        # Check if we have already computed the value for this distance
+        if d in self.lambda_cache:
+            return self.lambda_cache[d]
+
+        # Compute the value and store it in the cache
+        lambda_value = np.log(2)/(0.48*d*d -3.69*d + 14.05) # Empirical interpolation of the lambda parameter
+        self.lambda_cache[d] = lambda_value
+
+        return lambda_value
+        
     def _get_spark_conditional_probability(self, lambda_param, time_from_voltage_rise):
         """ Calculate the conditional probability of sparking at a given microsecond,
         given that it has not sparked yet since the last voltage rise."""
@@ -154,21 +165,20 @@ class WireEdmEnv(gym.Env):
         """
         Calculate the conditional probability of the wire breaking after a spark.
         """
-
-        # filter out -1 and sort the positions
-        relevant_sparks = np.sort(self.sparks_positions[self.sparks_positions != -1])
-
-        # calculate the distance between the sparks and find how many are within range
-        distances = np.diff(relevant_sparks)
-        sparks_in_range = np.sum(distances < self.heat_affected_zone)
-
-        # check if wire breaks
-        if sparks_in_range >= 2:
+        
+        # get the positions of the sparks in the wire
+        positions = [spark[0] for spark in self.sparks]
+        positions_sorted = np.sort(positions)
+        # get the distances between the sparks
+        distances = np.diff(positions_sorted)
+        # get the number of colliding sparks
+        sparks_collisions = np.sum(distances < self.heat_affected_zone)
+        if sparks_collisions >= 2:
             return 1
         else:
             return 0
         
-
+    
     def _generate_sparks(self):
         """
         Generate sparks in the wire based on the conditional probability of
@@ -178,24 +188,16 @@ class WireEdmEnv(gym.Env):
         if np.random.rand() < self._get_spark_conditional_probability(self._get_lambda(self.wire_position, self.workpiece_position), self.time_counter):
             self.time_counter = 0
             self.time_counter_global += 1
-            
             self.spark_counter += 1
-            
             self.workpiece_position += self.workpiece_distance_increment
- 
             spark_y = np.random.randint(0, self.workpiece_height)
-            
             spark_x = (self.wire_position + self.workpiece_position)/2
-            
             self._add_spark(spark_y)
-            
             self.sparks_frame.append((spark_x , spark_y))  # Add spark to the list of sparks in the current frame
-            
             # Check if the wire is broken
             self.is_wire_broken = np.random.rand() < self._get_wire_break_conditional_probability()
             
             if self.is_wire_broken:
-                print(self.sparks_positions)
                 print("Wire broken!")
             
             self.is_wire_colliding = self.wire_position >= self.workpiece_position
@@ -209,22 +211,22 @@ class WireEdmEnv(gym.Env):
             # After a spark, the voltage is down for rest_time + self.pulse_duration microseconds
             for _ in range(self.rest_time + self.pulse_duration):
                 self.time_counter_global += 1
-                self._add_spark(-1) # -1 means no spark
 
         else:
             self.time_counter += 1
             self.time_counter_global += 1
-            self._add_spark(-1) # -1 means no spark
         
     def _unwind_wire(self):
         """
         Unwind the wire by the unwinding speed. This affects the position of the sparks in the wire.
         """
         # add delta to all the spark positions
-        self.sparks_positions[self.sparks_positions != -1] += self.unwinding_speed
-
-        # replace positions greater than workpiece_height with -1
-        self.sparks_positions[self.sparks_positions > self.workpiece_height] = -1
+        new_sparks = []
+        for spark in self.sparks:
+            new_spark = (spark[0] - self.unwinding_speed, spark[1] - 1)
+            if new_spark[0] >= 0 and new_spark[1] >= 0:
+                new_sparks.append(new_spark)
+        self.sparks = new_sparks
             
     def _move_motor(self, motor_step):
         """
@@ -298,10 +300,76 @@ class WireEdmEnv(gym.Env):
         return observation, reward, terminated, self.truncated, info
     
     def _render_frame(self):
-        self.display.draw()
+        if self.window is None and self.render_mode == "human":
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode((self.window_width, self.window_height))
+            
+        if self.clock is None and self.render_mode == "human":
+            self.clock = pygame.time.Clock()
+            
+            
+        self.window.fill((50, 50, 50))
+        # note that the wire position is the position of the right end of the wire
+        wire_rect = pygame.Rect(self.wire_position - self.wire_width, 0, self.wire_width, self.wire_height)
+        pygame.draw.rect(self.window, (200, 100, 0), wire_rect)
 
-    def reset(self): # TODO CHECK THE SEED RESET
+        workpiece_rect = pygame.Rect(self.workpiece_position, self.window_height/2 - self.workpiece_height_render/2, self.workpiece_width, self.workpiece_height_render)        
         
+        pygame.draw.rect(self.window, (150, 150, 150), workpiece_rect)
+        
+        for x, y in self.sparks_frame:
+            spark_height =  5 
+            spark_width = abs(self.workpiece_position - self.wire_position)  # Width of the spark is the distance between the wire and the workpiece
+            spark_rect = pygame.Rect(x - spark_width/2, self.window_height/2 - self.workpiece_height_render/2 + y*self.vertical_downscale - spark_height/2, spark_width, spark_height)
+            pygame.draw.ellipse(self.window, (255, 255, 255), spark_rect.inflate(20, 20))
+            pygame.draw.ellipse(self.window, (250, 250, 255), spark_rect.inflate(18, 18))
+            pygame.draw.ellipse(self.window, (245, 245, 255), spark_rect.inflate(16, 16))
+            pygame.draw.ellipse(self.window, (240, 240, 255), spark_rect.inflate(14, 14))
+            pygame.draw.ellipse(self.window, (235, 235, 255), spark_rect.inflate(12, 12))
+            pygame.draw.ellipse(self.window, (230, 230, 255), spark_rect.inflate(10, 10))
+            pygame.draw.ellipse(self.window, (225, 225, 255), spark_rect.inflate(8, 8))
+            pygame.draw.ellipse(self.window, (220, 220, 255), spark_rect.inflate(6, 6))
+            pygame.draw.ellipse(self.window, (215, 215, 255), spark_rect.inflate(4, 4))
+            pygame.draw.ellipse(self.window, (210, 210, 255), spark_rect.inflate(2, 2))
+            pygame.draw.ellipse(self.window, (205, 205, 255), spark_rect)
+        
+        #draw FPS in the upper left corner
+        
+        
+        self.clock.tick(self.metadata["render_fps"])
+        font = pygame.font.SysFont('Arial', 20)
+        
+        t2 = pygame.time.get_ticks()
+        
+        fps = 1000/(t2 - self.t1)
+        text = font.render('FPS: ' + str(int(fps)), True, (255, 255, 255))
+        self.window.blit(text, (0, 0))
+        self.t1 = t2
+        
+        #now the same but with the distance between the wire and the workpiece
+        average_gap = sum(self.average_gap)/len(self.average_gap)
+        text2 = font.render('Gap distance (um): ' + str(int(average_gap)), True, (255, 255, 255))
+        position2 = (0, 20)
+        self.window.blit(text2, position2)
+        
+        # now the same but with the average speed of the wire
+        average_speed = sum(self.average_speed)/len(self.average_speed)
+        average_speed = average_speed * 60
+        position4 = (0, 40)
+        text4 = font.render('Average speed (mm/min):  ' + str(int(average_speed)), True, (255, 255, 255))
+        self.window.blit(text4, position4)
+        pygame.display.update()
+        self.check_for_events()
+        
+    def check_for_events(self):
+        for event in pygame.event.get():  
+            if event.type == pygame.QUIT: 
+                pygame.quit()
+                sys.exit()
+                
+    def reset(self,seed=1, options=None): # TODO CHECK THE SEED RESET
+        super().reset(seed=seed)
         self.workpiece_position = self.workpiece_start
         self.wire_position = self.wire_start
         self.time_counter = 0
@@ -341,89 +409,7 @@ class WireEdmEnv(gym.Env):
             "time_counter_global": self.time_counter_global,
             "is_wire_broken": self.is_wire_broken,
         }
-        
 
-class Display:
-    def __init__(self, environment):
-        self.environment = environment
-        self.win_width = 1280
-        self.win_height = 720
-        self.wire_width = 300 # wire width in pixels
-        self.wire_height = self.win_height
-        self.workpiece_width = self.win_width - self.environment.workpiece_position
-        self.vertical_downscale = 0.05
-        self.workpiece_height = self.environment.workpiece_height * self.vertical_downscale
-        self.init_pygame()
-
-    def init_pygame(self):
-        pygame.init()
-        self.screen = pygame.display.set_mode((self.win_width, self.win_height))
-        pygame.display.set_caption('Wire EDM Simulation')
-        # make sure the game will run at 60 fps maximum
-        self.clock = pygame.time.Clock()
-
-    def draw(self):
-        self.screen.fill((50, 50, 50))
-        # note that the wire position is the position of the right end of the wire
-        wire_rect = pygame.Rect(self.environment.wire_position - self.wire_width, 0, self.wire_width, self.wire_height)
-        pygame.draw.rect(self.screen, (200, 100, 0), wire_rect)
-
-        workpiece_rect = pygame.Rect(self.environment.workpiece_position, self.win_height/2 - self.workpiece_height/2, self.workpiece_width, self.workpiece_height)        
-        
-        pygame.draw.rect(self.screen, (150, 150, 150), workpiece_rect)
-        
-        for x, y in self.environment.sparks_frame:
-            spark_height =  5
-            spark_width = abs(self.environment.workpiece_position - self.environment.wire_position)  # Width of the spark is the distance between the wire and the workpiece
-            spark_rect = pygame.Rect(x - spark_width/2, self.win_height/2 - self.workpiece_height/2 + y*self.vertical_downscale - spark_height/2, spark_width, spark_height)
-            pygame.draw.ellipse(self.screen, (255, 255, 255), spark_rect.inflate(20, 20))
-            pygame.draw.ellipse(self.screen, (250, 250, 255), spark_rect.inflate(18, 18))
-            pygame.draw.ellipse(self.screen, (245, 245, 255), spark_rect.inflate(16, 16))
-            pygame.draw.ellipse(self.screen, (240, 240, 255), spark_rect.inflate(14, 14))
-            pygame.draw.ellipse(self.screen, (235, 235, 255), spark_rect.inflate(12, 12))
-            pygame.draw.ellipse(self.screen, (230, 230, 255), spark_rect.inflate(10, 10))
-            pygame.draw.ellipse(self.screen, (225, 225, 255), spark_rect.inflate(8, 8))
-            pygame.draw.ellipse(self.screen, (220, 220, 255), spark_rect.inflate(6, 6))
-            pygame.draw.ellipse(self.screen, (215, 215, 255), spark_rect.inflate(4, 4))
-            pygame.draw.ellipse(self.screen, (210, 210, 255), spark_rect.inflate(2, 2))
-            pygame.draw.ellipse(self.screen, (205, 205, 255), spark_rect)
-        
-        #draw FPS in the upper left corner
-        
-        
-        self.clock.tick(self.environment.metadata["render_fps"])
-        font = pygame.font.SysFont('Arial', 20)
-        
-        t2 = pygame.time.get_ticks()
-        
-        fps = 1000/(t2 - self.environment.t1)
-        text = font.render('FPS: ' + str(int(fps)), True, (255, 255, 255))
-        self.screen.blit(text, (0, 0))
-        self.environment.t1 = t2
-        
-        #now the same but with the distance between the wire and the workpiece
-        average_gap = sum(self.environment.average_gap)/len(self.environment.average_gap)
-        text2 = font.render('Gap distance (um): ' + str(int(average_gap)), True, (255, 255, 255))
-        position2 = (0, 20)
-        self.screen.blit(text2, position2)
-        
-        # now the same but with the average speed of the wire
-        average_speed = sum(self.environment.average_speed)/len(self.environment.average_speed)
-        average_speed = average_speed * 60
-        position4 = (0, 40)
-        text4 = font.render('Average speed (mm/min):  ' + str(int(average_speed)), True, (255, 255, 255))
-        self.screen.blit(text4, position4)
-        
-
-        pygame.display.update()
-        self.check_for_events()
-                    
-    def check_for_events(self):
-        for event in pygame.event.get():  
-            if event.type == pygame.QUIT: 
-                pygame.quit()
-                sys.exit()
-            
 class Q_learning_actor:
     def __init__(self, env, learning_rate = 0.005, initial_epsilon = 1, epsilon_decay = 0.993, min_epsilon = 0.01, gamma = 0.99):
         self.learning_rate = learning_rate
@@ -458,7 +444,7 @@ class PID_actor:
         
     
     def get_action(self, obs: int) -> int:
-        if obs < 5:
+        if obs < 2:
             return 2
         else:
             return 0
@@ -467,17 +453,15 @@ class PID_actor:
         pass
     def decay_epsilon(self):
         pass
-        
+    
+    
 def main():
     # Initializing Environment
-    env = WireEdmEnv()
-    # # Initializing Display and setting it for the Environment
-    # display = Display(env)
-    # env.set_display(display)
-    
-    N_episodes = 10
-    agent = Q_learning_actor(env)
-    # agent = PID_actor(env)
+    env = WireEdmEnv(render_mode= 'human')
+
+    N_episodes = 300
+    # agent = Q_learning_actor(env)
+    agent = PID_actor(env)
     reward_list = []
     for episode in range(N_episodes):
         obs, info = env.reset()
@@ -488,41 +472,21 @@ def main():
             next_obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             agent.update(obs, action, reward, terminated, next_obs)
-            
             done = terminated or truncated
-            
             obs = next_obs
         reward_list.append(total_reward)
-
-        for i in sorted(agent.q_table):
-            motion = np.argmax(agent.q_table[i])
-            if motion > env.max_steps:
-                motion_str = "Right"
-            if motion < env.max_steps:
-                motion_str = "Left"
-            if motion == env.max_steps:
-                motion_str = "Still"
-            print(i, motion_str)
         
         print ("Episode: ", episode, "Total reward: ", total_reward)
         agent.decay_epsilon()
-        print("Epsilon: ", agent.epsilon)
-        
-    # # save reward list as a csv file
-    # np.savetxt("reward_list_PID_Q_Learning.csv", reward_list, delimiter=",")
-    
-    # # save q_table as a pickle file
-    # import pickle
-    # with open("q_table_PID_QL.pickle", "wb") as f:
-    #     pickle.dump(agent.q_table, f)
-    #     f.close()
 
-import cProfile
-import pstats
+        
+    print("Average reward: ", sum(reward_list)/len(reward_list))
+
 if __name__ == '__main__':
-    profiler = cProfile.Profile()
-    profiler.enable()
+    import time
+    t1 = time.time()
     main()
-    profiler.disable()
-    stats = pstats.Stats(profiler).sort_stats('tottime')
-    stats.print_stats()
+    t2 = time.time()
+    print("Time elapsed in seconds: ", t2 - t1)
+
+
