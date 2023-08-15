@@ -34,7 +34,6 @@ class WireEdmEnv(gym.Env):
         """
         
         # Constants for the environment
-        
             ## Environment constants
         self.workpiece_start = workpiece_start
         self.wire_start = wire_start
@@ -84,41 +83,27 @@ class WireEdmEnv(gym.Env):
         
         # Pygame related attributes
         
-        self.window_width = 1280
-        self.window_height = 720
-        self.wire_width = 300 # wire width in pixels
-        self.wire_height = self.window_height
-        self.workpiece_width = self.window_width - self.workpiece_position
-        self.vertical_downscale = 0.05
-        self.workpiece_height_render = self.workpiece_height * self.vertical_downscale
-        
-        # Gymasium variables
-        
-        # We have 2*max_steps + 1 possible actions. This can be encoded as a discrete space with 2*max_steps + 1 elements.
-        self.action_space = spaces.Discrete(2*max_steps + 1)
-        
-        # Our observation space is just a single integer number, this is,
-        # self.spark_counter (number of sparks in the last servo_interval microseconds)
-        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
-        
-        # Dictionary to map actions to motor steps
-        self._action_to_motor_step = lambda action: (1, action - self.max_steps) if action > self.max_steps else (-1, self.max_steps - action)
-        
-        self.truncated = False
-        
         assert render_mode is None or render_mode in self.metadata["render_modes"]
         self.render_mode = render_mode
+        if self.render_mode == "human":
+            self.window_width = 1280
+            self.window_height = 720
+            self.wire_width = 300 # wire width in pixels
+            self.wire_height = self.window_height
+            self.workpiece_width = self.window_width - self.workpiece_position
+            self.vertical_downscale = 0.05
+            self.workpiece_height_render = self.workpiece_height * self.vertical_downscale            
+            self.window = None
+            self.clock = None
         
-        
-        """
-        If human-rendering is used, `self.window` will be a reference
-        to the window that we draw to. `self.clock` will be a clock that is used
-        to ensure that the environment is rendered at the correct framerate in
-        human-mode. They will remain `None` until human-mode is used for the
-        first time.
-        """
-        self.window = None
-        self.clock = None
+        # Gymasium variables
+        # We have 2*max_steps + 1 possible actions. This can be encoded as a discrete space with 2*max_steps + 1 elements.
+        self.action_space = spaces.Discrete(2*max_steps + 1)
+        # Our observation space is just a single integer number, this is: self.spark_counter (number of sparks in the last servo_interval microseconds)
+        self.observation_space = spaces.Box(low=0, high=np.inf, shape=(1,), dtype=np.float32)
+        # Dictionary to map actions to motor steps
+        self._action_to_motor_step = lambda action: (1, action - self.max_steps) if action > self.max_steps else (-1, self.max_steps - action)
+        self.truncated = False
         
     def _add_spark(self, position):
         self.sparks.append((position, self.dissipation_time))
@@ -298,77 +283,8 @@ class WireEdmEnv(gym.Env):
         terminated = self.is_done()
         
         return observation, reward, terminated, self.truncated, info
-    
-    def _render_frame(self):
-        if self.window is None and self.render_mode == "human":
-            pygame.init()
-            pygame.display.init()
-            self.window = pygame.display.set_mode((self.window_width, self.window_height))
-            
-        if self.clock is None and self.render_mode == "human":
-            self.clock = pygame.time.Clock()
-            
-            
-        self.window.fill((50, 50, 50))
-        # note that the wire position is the position of the right end of the wire
-        wire_rect = pygame.Rect(self.wire_position - self.wire_width, 0, self.wire_width, self.wire_height)
-        pygame.draw.rect(self.window, (200, 100, 0), wire_rect)
-
-        workpiece_rect = pygame.Rect(self.workpiece_position, self.window_height/2 - self.workpiece_height_render/2, self.workpiece_width, self.workpiece_height_render)        
-        
-        pygame.draw.rect(self.window, (150, 150, 150), workpiece_rect)
-        
-        for x, y in self.sparks_frame:
-            spark_height =  5 
-            spark_width = abs(self.workpiece_position - self.wire_position)  # Width of the spark is the distance between the wire and the workpiece
-            spark_rect = pygame.Rect(x - spark_width/2, self.window_height/2 - self.workpiece_height_render/2 + y*self.vertical_downscale - spark_height/2, spark_width, spark_height)
-            pygame.draw.ellipse(self.window, (255, 255, 255), spark_rect.inflate(20, 20))
-            pygame.draw.ellipse(self.window, (250, 250, 255), spark_rect.inflate(18, 18))
-            pygame.draw.ellipse(self.window, (245, 245, 255), spark_rect.inflate(16, 16))
-            pygame.draw.ellipse(self.window, (240, 240, 255), spark_rect.inflate(14, 14))
-            pygame.draw.ellipse(self.window, (235, 235, 255), spark_rect.inflate(12, 12))
-            pygame.draw.ellipse(self.window, (230, 230, 255), spark_rect.inflate(10, 10))
-            pygame.draw.ellipse(self.window, (225, 225, 255), spark_rect.inflate(8, 8))
-            pygame.draw.ellipse(self.window, (220, 220, 255), spark_rect.inflate(6, 6))
-            pygame.draw.ellipse(self.window, (215, 215, 255), spark_rect.inflate(4, 4))
-            pygame.draw.ellipse(self.window, (210, 210, 255), spark_rect.inflate(2, 2))
-            pygame.draw.ellipse(self.window, (205, 205, 255), spark_rect)
-        
-        #draw FPS in the upper left corner
-        
-        
-        self.clock.tick(self.metadata["render_fps"])
-        font = pygame.font.SysFont('Arial', 20)
-        
-        t2 = pygame.time.get_ticks()
-        
-        fps = 1000/(t2 - self.t1)
-        text = font.render('FPS: ' + str(int(fps)), True, (255, 255, 255))
-        self.window.blit(text, (0, 0))
-        self.t1 = t2
-        
-        #now the same but with the distance between the wire and the workpiece
-        average_gap = sum(self.average_gap)/len(self.average_gap)
-        text2 = font.render('Gap distance (um): ' + str(int(average_gap)), True, (255, 255, 255))
-        position2 = (0, 20)
-        self.window.blit(text2, position2)
-        
-        # now the same but with the average speed of the wire
-        average_speed = sum(self.average_speed)/len(self.average_speed)
-        average_speed = average_speed * 60
-        position4 = (0, 40)
-        text4 = font.render('Average speed (mm/min):  ' + str(int(average_speed)), True, (255, 255, 255))
-        self.window.blit(text4, position4)
-        pygame.display.update()
-        self.check_for_events()
-        
-    def check_for_events(self):
-        for event in pygame.event.get():  
-            if event.type == pygame.QUIT: 
-                pygame.quit()
-                sys.exit()
                 
-    def reset(self,seed=1, options=None): # TODO CHECK THE SEED RESET
+    def reset(self,seed=1, options=None):
         super().reset(seed=seed)
         self.workpiece_position = self.workpiece_start
         self.wire_position = self.wire_start
@@ -409,84 +325,70 @@ class WireEdmEnv(gym.Env):
             "time_counter_global": self.time_counter_global,
             "is_wire_broken": self.is_wire_broken,
         }
+        
+    def _render_frame(self):
+        if self.window is None and self.render_mode == "human":
+            pygame.init()
+            pygame.display.init()
+            self.window = pygame.display.set_mode((self.window_width, self.window_height))
+            
+        if self.clock is None and self.render_mode == "human":
+            self.clock = pygame.time.Clock()
+            
+        self.window.fill((50, 50, 50))
+        # note that the wire position is the position of the right end of the wire
+        wire_rect = pygame.Rect(self.wire_position - self.wire_width, 0, self.wire_width, self.wire_height)
+        pygame.draw.rect(self.window, (200, 100, 0), wire_rect)
 
-class Q_learning_actor:
-    def __init__(self, env, learning_rate = 0.005, initial_epsilon = 1, epsilon_decay = 0.993, min_epsilon = 0.01, gamma = 0.99):
-        self.learning_rate = learning_rate
-        self.env = env
-        self.epsilon = initial_epsilon
-        self.epsilon_decay = epsilon_decay
-        self.min_epsilon = min_epsilon
-        self.gamma = gamma
-        self.q_table = {}
+        workpiece_rect = pygame.Rect(self.workpiece_position, self.window_height/2 - self.workpiece_height_render/2, self.workpiece_width, self.workpiece_height_render)        
         
-    def get_action(self, obs: int) -> int:
+        pygame.draw.rect(self.window, (150, 150, 150), workpiece_rect)
         
-        if np.random.random() < self.epsilon or obs not in self.q_table:
-            # Explore
-            return np.random.randint(0, 2*self.env.max_steps + 1)
-        else:
-            return int(np.argmax(self.q_table[obs]))
+        for x, y in self.sparks_frame:
+            spark_height =  5 
+            spark_width = abs(self.workpiece_position - self.wire_position)  # Width of the spark is the distance between the wire and the workpiece
+            spark_rect = pygame.Rect(x - spark_width/2, self.window_height/2 - self.workpiece_height_render/2 + y*self.vertical_downscale - spark_height/2, spark_width, spark_height)
+            pygame.draw.ellipse(self.window, (255, 255, 255), spark_rect.inflate(20, 20))
+            pygame.draw.ellipse(self.window, (250, 250, 255), spark_rect.inflate(18, 18))
+            pygame.draw.ellipse(self.window, (245, 245, 255), spark_rect.inflate(16, 16))
+            pygame.draw.ellipse(self.window, (240, 240, 255), spark_rect.inflate(14, 14))
+            pygame.draw.ellipse(self.window, (235, 235, 255), spark_rect.inflate(12, 12))
+            pygame.draw.ellipse(self.window, (230, 230, 255), spark_rect.inflate(10, 10))
+            pygame.draw.ellipse(self.window, (225, 225, 255), spark_rect.inflate(8, 8))
+            pygame.draw.ellipse(self.window, (220, 220, 255), spark_rect.inflate(6, 6))
+            pygame.draw.ellipse(self.window, (215, 215, 255), spark_rect.inflate(4, 4))
+            pygame.draw.ellipse(self.window, (210, 210, 255), spark_rect.inflate(2, 2))
+            pygame.draw.ellipse(self.window, (205, 205, 255), spark_rect)
         
-    def update(self, obs: int, action: int, reward: float, terminated: bool, next_obs: int):
-        if obs not in self.q_table:
-            self.q_table[obs] = np.zeros(2*self.env.max_steps + 1)
-        if next_obs not in self.q_table:
-            self.q_table[next_obs] = np.zeros(2*self.env.max_steps + 1)
-        self.q_table[obs][action] += self.learning_rate * (reward + self.gamma * np.max(self.q_table[next_obs]) - self.q_table[obs][action])
+        #draw FPS in the upper left corner
         
-    def decay_epsilon(self):
-        self.epsilon = max(self.epsilon * self.epsilon_decay, self.min_epsilon)
-
-class PID_actor:
-    def __init__(self, env):
-        self.environment = env
+        self.clock.tick(self.metadata["render_fps"])
+        font = pygame.font.SysFont('Arial', 20)
         
-    
-    def get_action(self, obs: int) -> int:
-        if obs < 2:
-            return 2
-        else:
-            return 0
+        t2 = pygame.time.get_ticks()
         
-    def update(self, obs: int, action: int, reward: float, terminated: bool, next_obs: int):
-        pass
-    def decay_epsilon(self):
-        pass
-    
-    
-def main():
-    # Initializing Environment
-    env = WireEdmEnv(render_mode= 'human')
-
-    N_episodes = 300
-    # agent = Q_learning_actor(env)
-    agent = PID_actor(env)
-    reward_list = []
-    for episode in range(N_episodes):
-        obs, info = env.reset()
-        done = False
-        total_reward = 0
-        while not done:
-            action = agent.get_action(obs)
-            next_obs, reward, terminated, truncated, info = env.step(action)
-            total_reward += reward
-            agent.update(obs, action, reward, terminated, next_obs)
-            done = terminated or truncated
-            obs = next_obs
-        reward_list.append(total_reward)
+        fps = 1000/(t2 - self.t1)
+        text = font.render('FPS: ' + str(int(fps)), True, (255, 255, 255))
+        self.window.blit(text, (0, 0))
+        self.t1 = t2
         
-        print ("Episode: ", episode, "Total reward: ", total_reward)
-        agent.decay_epsilon()
-
+        #now the same but with the distance between the wire and the workpiece
+        average_gap = sum(self.average_gap)/len(self.average_gap)
+        text2 = font.render('Gap distance (um): ' + str(int(average_gap)), True, (255, 255, 255))
+        position2 = (0, 20)
+        self.window.blit(text2, position2)
         
-    print("Average reward: ", sum(reward_list)/len(reward_list))
-
-if __name__ == '__main__':
-    import time
-    t1 = time.time()
-    main()
-    t2 = time.time()
-    print("Time elapsed in seconds: ", t2 - t1)
-
-
+        # now the same but with the average speed of the wire
+        average_speed = sum(self.average_speed)/len(self.average_speed)
+        average_speed = average_speed * 60
+        position4 = (0, 40)
+        text4 = font.render('Average speed (mm/min):  ' + str(int(average_speed)), True, (255, 255, 255))
+        self.window.blit(text4, position4)
+        pygame.display.update()
+        self.check_for_events()
+        
+    def check_for_events(self):
+        for event in pygame.event.get():  
+            if event.type == pygame.QUIT: 
+                pygame.quit()
+                sys.exit()
