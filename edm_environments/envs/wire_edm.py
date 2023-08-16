@@ -18,6 +18,10 @@ class WireEDMEnv(gym.Env):
                  wire_start=50, workpiece_start=100, max_time_steps = 1000):
         
         """
+        ## Description
+        
+        This environment is a simulation for a simplified stochastic 1D simulation of the Wire Electrical Discharge Machining (Wire EDM) process.        
+        
         Initialize the environment with the given parameters.
         :param servo_interval: Time between motor movements.
         :param pulse_duration: Duration of the electric pulse delivered by the generator after the breakdown of the dielectric.
@@ -394,6 +398,6 @@ class WireEDMEnv(gym.Env):
                 sys.exit()
                 
     def close(self):
-        if self.window is not None:
+        if self.render_mode == "human" and self.window is not None:
             pygame.quit()
             sys.exit()
