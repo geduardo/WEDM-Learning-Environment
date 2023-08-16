@@ -7,7 +7,7 @@ from collections import deque
 import gymnasium as gym
 from gymnasium import spaces
 
-class WireEdmEnv(gym.Env):    
+class WireEDMEnv(gym.Env):    
     metadata = {"render_modes": ["human"], "render_fps": 300}
     
     """A class representing a simulated environment for wire erosion. All units are in micrometers and microseconds."""
