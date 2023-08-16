@@ -1,7 +1,8 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="edm_environments",
     version="0.0.1",
-    install_requires=["gymnasium==0.26.0", "pygame==2.1.0"],
+    packages=find_packages(include=['envs*', 'wrappers*']),
+    install_requires=["gymnasium==0.29.0", "pygame==2.1.0"],
 )

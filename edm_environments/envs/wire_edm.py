@@ -114,7 +114,7 @@ class WireEDMEnv(gym.Env):
 
         :return: The current observation of the environment.
         """
-        return self.spark_counter
+        return np.array([self.spark_counter], dtype=np.float32)
 
         
     def _get_lambda(self, wire_position, workpiece_position):
@@ -284,7 +284,7 @@ class WireEDMEnv(gym.Env):
         
         return observation, reward, terminated, self.truncated, info
                 
-    def reset(self,seed=1, options=None):
+    def reset(self,seed=None, options=None):
         super().reset(seed=seed)
         self.workpiece_position = self.workpiece_start
         self.wire_position = self.wire_start
@@ -392,3 +392,8 @@ class WireEDMEnv(gym.Env):
             if event.type == pygame.QUIT: 
                 pygame.quit()
                 sys.exit()
+                
+    def close(self):
+        if self.window is not None:
+            pygame.quit()
+            sys.exit()
