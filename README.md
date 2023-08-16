@@ -1,11 +1,11 @@
-# Wire Electrical Discharge Machining (WEDM) Simulation Environment
+# Wire EDM Gymnasium environments
 
-This Python-based simulation environment aims to emulate the Wire Electrical Discharge Machining (WEDM) process, with a focus on the development and testing of various learning control strategies. The final goal is to transfer the developed and tested control strategies to a real-life wire EDM machine.
+This repository contains a Python package that implements a simplified stochastic simulation of a 1D Wire Electrical Discharge Machining (Wire EDM) process.
 
-The simulation environment follows the principles of Gymnasium (formerly known as OpenAI Gym) environments, hence, allowing easy integration with existing Reinforcement Learning (RL) implementations. Furthermore, it is designed to be highly modular. Various aspects of the system, such as the wire break mechanism, ignition delay time, material removal process, and motor dynamics, can be separately integrated, allowing the creation of a comprehensive and representative simulation of the WEDM process.
+Designed for compatibility with the [Gymnasium](https://gymnasium.farama.org/) library—formerly known as OpenAI Gym—this package facilitates the efficient testing of existing reinforcement learning algorithms and various control strategies specific to the Wire EDM process.
 
-## Contributing
-We welcome all contributions. If you find any bugs, please file an issue. If you want to contribute to the codebase, feel free to submit a pull request.
+Additionally, the package provides a basic visualization feature using `pygame`, in line with common practices in other Gymnasium environments.
 
 ## License
-This project is licensed under the MIT License. Please see the LICENSE file for more information.
+
+This project is licensed under the MIT License - see the [LICENSE](./LICENSE.md) file for details.
