@@ -1,5 +1,7 @@
+![image](https://github.com/geduardo/WEDM-minimal-simulation/assets/48300381/042f8ab7-87b2-430e-9d5a-143c95bf69e3)
 
 # Wire EDM Gymnasium environments
+
 
 This repository contains a Python package that implements a simplified stochastic simulation of a 1D Wire Electrical Discharge Machining (Wire EDM) process.
 
