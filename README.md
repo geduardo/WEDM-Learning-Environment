@@ -20,8 +20,8 @@ Requirements:
 1. Clone this repository to your local machine:
 
     ```bash
-    git clone https://github.com/geduardo/WEDM-minimal-simulation
-    cd WEDM-minimal-simulation
+    git clone https://github.com/geduardo/WEDM-Learning-Environment
+    cd WEDM-Learning-Environment
     ```
 
 2. Optionally, create a virtual environment for the project:
@@ -50,7 +50,7 @@ To test that the installation was successful, you can run the following script:
 ```python
 import edm_environments
 import gymnasium as gym
-env = gym.make('edm_environments/WireEDM-v0', render_mode='human', fps=60)
+env = gym.make('edm_environments/WireEDM-v0', render_mode='human')
 observation, info = env.reset()
 for _ in range(1000):
     action = env.action_space.sample()  # agent policy that uses the observation and info
