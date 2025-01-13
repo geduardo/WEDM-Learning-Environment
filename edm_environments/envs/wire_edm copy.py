@@ -155,22 +155,27 @@ class IgnitionModule(EDMModule):
 # Add other modules similarly
 class MaterialRemovalModule(EDMModule):
     def update(self, state):
-        # Your material removal logic
-        pass
+        # Check if there's a new spark (spark_status[0] == 1 and spark_status[2] == 0)
+        spark_state, _, spark_duration = state.spark_status
+        if spark_state == 1 and spark_duration == 0:
+            # Add a small random amount to workpiece position when new spark occurs
+            # This simulates material removal at spark location
+            removal_amount = 0.001  # 1 micron per spark
+            state.workpiece_position += removal_amount
 
 class DielectricModule(EDMModule):
     def update(self, state):
         # Your dielectric logic
+        # For the moment leave blank
         pass
 
 class WireModule(EDMModule):
     def update(self, state):
-        # Your wire logic
+        # Wire position depends on servo action, but leave blank for now
         pass
-
 class MechanicsModule(EDMModule):
     def update(self, state):
-        # Your mechanics logic
+        # For the moment leave blank
         pass
 
 
@@ -219,6 +224,25 @@ class WireEDMEnv(gym.Env):
                 dtype=np.float32
             )
         })
+        
+        self.previous_target_current = 0 # Store previous target current for reward calculation
+        
+        # Import modules here to avoid circular imports
+        import gymnasium as gym
+        from gymnasium import spaces
+        import numpy as np
+        from .edm_state import EDMState
+        from . import update_ignition
+        from . import update_material_removal
+        from . import update_dielectric
+        from . import update_wire
+        from . import update_mechanics
+        
+        self._update_ignition = update_ignition.update_ignition
+        self._update_material_removal = update_material_removal.update_material_removal
+        self._update_dielectric = update_dielectric.update_dielectric
+        self._update_wire = update_wire.update_wire
+        self._update_mechanics = update_mechanics.update_mechanics
         
 def step(self, action):
     # Track if this is a control step (every 1ms / 1000μs)
@@ -274,75 +298,3 @@ def step(self, action):
     }
     
     return observation, reward, terminated, truncated, info
-
-
-def _update_ignition(self):
-    """Updates the ignition state based on a stochastic breakdown model.
-    
-    The ignition process is modeled as a hazard function that gives the probability
-    of breakdown occurring at the current timestep, given that it hasn't occurred yet.
-    We use an exponential distribution for the breakdown delay time, which gives a
-    constant hazard rate lambda that depends on the gap distance.
-    """
-    # First check for short circuits
-    if self.state.is_wire_colliding:
-        self.state.spark_status = (-1, self.state.wire_position, 0)  # Short circuit
-        self.state.voltage = 0
-        self.state.current = self.state.target_current
-        return
-        
-    # If there's no voltage applied, no ignition can occur
-    if self.state.target_voltage == 0:
-        self.state.spark_status = (0, None, 0)  # No spark
-        self.state.voltage = 0
-        self.state.current = 0
-        return
-
-
-    # If there's already a spark, maintain it until current is cut
-    if spark_state == 1:
-        if self.state.target_current:
-            self.state.spark_status = (1, spark_location, spark_duration + 1)
-            self.state.voltage = self.state.target_voltage * 0.3  # Voltage drop during discharge
-            self.state.current = self.state.target_current
-        else:
-            self.state.spark_status = (0, None, 0)  # Spark ends when current is cut
-            self.state.voltage = self.state.target_voltage
-            self.state.current = 0
-        return
-            
-    # Calculate gap distance (simplified 1D model)
-    gap_distance = abs(self.state.workpiece_position - self.state.wire_position)
-    
-    # Calculate breakdown probability (hazard rate) based on gap distance
-    # This should be replaced with experimental data fitting
-    lambda_rate = 1.0 / (gap_distance + 1e-6)  # Simple inverse relationship with distance
-    
-    # Sample from exponential distribution
-    if self.np_random.random() < lambda_rate * self.dt:
-        # Ignition occurs - sample location uniformly along wire length
-        spark_location = self.state.wire_position
-        self.state.spark_status = (1, spark_location, 0)
-        self.state.voltage = self.state.target_voltage * 0.3  # Voltage drops during discharge
-        self.state.current = self.state.target_current
-    else:
-        # No ignition
-        self.state.spark_status = (0, None, 0)
-        self.state.voltage = self.state.target_voltage
-        self.state.current = 0
-        
-    
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        observation = self._get_obs() 
-        info = {}
-        return observation, info
-    
-    def render(self):
-        pass
-        
-    def close(self):
-        pass
-    
-    def _get_obs(self):
-        return np.array([0], dtype=np.float32)
