@@ -22,8 +22,10 @@ class EDMState:
     
     # Generator control state variables
     target_voltage: Optional[float] = None
-    target_current: Optional[float] = None
-    
+    peak_current: Optional[float] = None
+    OFF_time: Optional[float] = None
+    ON_time: Optional[float] = None
+
     # Workpiece state variables
     
     workpiece_position: float = 0 # Current position of the workpiece
@@ -48,7 +50,7 @@ class EDMState:
     # Spark state variables
     
     # Tuple to track current spark status (state, y-location, duration)
-    # state: 0=No event, 1=Spark formation, -1=Short circuit
+    # state: 0=No event, 1=Spark formation, -1=Short circuit, -2=Rest period
     # y_location: Position along wire length where spark is occurring (None if no spark)
     # duration: How many timesteps the current spark state has existed
     spark_status: Tuple[int, Optional[float], int] = (0, None, 0)
@@ -88,50 +90,51 @@ class IgnitionModule(EDMModule):
         
     def update(self, state: EDMState) -> None:
         
-        # First check for short circuits
-        if state.is_wire_colliding:
-            state.spark_status = (-1, state.wire_position, 0)  # Short circuit
-            state.voltage = 0
-            state.current = state.target_current
-            return
-        
-        # If there's no voltage applied, no ignition can occur
-        if state.target_voltage == 0:
-            state.spark_status = (0, None, 0)  # No spark
-            state.voltage = 0
-            state.current = 0
-            return
-
-        # Unpack current spark status
+        # First, unpack the generator control state
+        target_voltage = state.target_voltage
+        peak_current = state.peak_current
+        ON_time = state.ON_time
+        OFF_time = state.OFF_time
+        # Check spark status in the previous timestep
         spark_state, spark_location, spark_duration = state.spark_status
-        
-        # If there's already a spark, maintain it until current is cut
-        if spark_state == 1:
-            if state.target_current:
-                state.spark_status = (1, spark_location, spark_duration + 1)
-                state.voltage = state.target_voltage * 0.3  # Voltage drop during discharge
-                state.current = state.target_current
+        # Suppose spark is already present, maintain it until current is cut
+        if spark_state == 1: # If spark is happening
+            state.spark_status = (1, spark_location, spark_duration + 1) # Increment counter
+            if state.spark_status[2] >= ON_time: # End of spark duration
+                state.spark_status[0] = -2 # Start rest period
+                state.current = 0
+                state.voltage = 0
             else:
-                state.spark_status = (0, None, 0)  # Spark ends when current is cut
-                state.voltage = state.target_voltage
+                state.current = peak_current
+                state.voltage = target_voltage * 0.3
+            return
+        
+        if spark_state == -2: # If in rest period
+            state.spark_status = (-2, None, spark_duration + 1)
+            if state.spark_status[2] >= OFF_time + ON_time:  # End of rest period
+                state.spark_status = (0, None, 0)
+                state.voltage = target_voltage
                 state.current = 0
             return
+        
+        if spark_state == 0: # No spark happening and not in rest period
+            self.voltage = target_voltage
+            self.current = 0
+            # Calculate probability of new spark formation
+            p_ignition = self._get_spark_conditional_probability(state)
     
-    # Calculate probability of new spark formation
-    p_ignition = self._get_spark_conditional_probability(state)
-    
-    # Sample from probability distribution
-    if self.env.np_random.random() < p_ignition:
-        # Ignition occurs - randomly choose location along wire height
-        spark_location = self.env.np_random.uniform(0, self.env.workpiece_height)
-        state.spark_status = (1, spark_location, 0)
-        state.voltage = state.target_voltage * 0.3  # Voltage drops during discharge
-        state.current = state.target_current
-    else:
-        # No ignition
-        state.spark_status = (0, None, 0)
-        state.voltage = state.target_voltage
-        state.current = 0
+            # Sample from probability distribution
+            if self.env.np_random.random() < p_ignition:
+                # Ignition occurs - randomly choose location along wire height
+                spark_location = self.env.np_random.uniform(0, self.env.workpiece_height)
+                state.spark_status = (1, spark_location, 0)
+                state.voltage = state.target_voltage * 0.3  # Voltage drops during discharge
+                state.current = state.peak_current
+            else:
+                # No ignition
+                state.spark_status = (0, None, 0)
+                state.voltage = state.target_voltage
+                state.current = 0
     
     def _get_spark_conditional_probability(self, state):
         """ Calculate the conditional probability of sparking at a given microsecond,
@@ -155,13 +158,9 @@ class IgnitionModule(EDMModule):
 # Add other modules similarly
 class MaterialRemovalModule(EDMModule):
     def update(self, state):
-        # Check if there's a new spark (spark_status[0] == 1 and spark_status[2] == 0)
-        spark_state, _, spark_duration = state.spark_status
-        if spark_state == 1 and spark_duration == 0:
-            # Add a small random amount to workpiece position when new spark occurs
-            # This simulates material removal at spark location
-            removal_amount = 0.001  # 1 micron per spark
-            state.workpiece_position += removal_amount
+        # Your material removal logic
+        # For the moment leave blank
+        pass
 
 class DielectricModule(EDMModule):
     def update(self, state):
@@ -173,6 +172,7 @@ class WireModule(EDMModule):
     def update(self, state):
         # Wire position depends on servo action, but leave blank for now
         pass
+    
 class MechanicsModule(EDMModule):
     def update(self, state):
         # For the moment leave blank
@@ -185,7 +185,6 @@ class WireEDMEnv(gym.Env):
     
     def __init__(self, render_mode=None):
         self.render_mode = render_mode
-        
         # Simulation parameters
         ## Internal timestep parameters
         self.dt = 1 # Base timestep (1μs)
@@ -207,94 +206,93 @@ class WireEDMEnv(gym.Env):
         
         self.state = EDMState() # Initialize state of the simulation
         
+        self.ignition_module = IgnitionModule(self)
+        self.material_removal_module = MaterialRemovalModule(self)
+        self.dielectric_module = DielectricModule(self)
+        self.wire_module = WireModule(self)
+        self.mechanics_module = MechanicsModule(self)
+        
         self.action_space = spaces.Dict({
             'servo': spaces.Box(
-                low=np.array([-1.0]),  # Placeholder values
+                low=np.array([-1.0]),
                 high=np.array([1.0]),
                 dtype=np.float32
             ),
-            'voltage_control': spaces.Box(
-                low=np.array([0.0]),
-                high=np.array([200.0]),  # Placeholder max voltage
-                dtype=np.float32
-            ),
-            'current_control': spaces.Box(
-                low=np.array([0.0]),
-                high=np.array([100.0]),  # Placeholder max current
-                dtype=np.float32
-            )
+            'generator_control': spaces.Dict({
+                'target_voltage': spaces.Box(
+                    low=np.array([0.0]),
+                    high=np.array([200.0]),  # Placeholder max voltage
+                    dtype=np.float32
+                ),
+                'peak_current': spaces.Box(
+                    low=np.array([0.0]),
+                    high=np.array([100.0]),  # Placeholder max current
+                    dtype=np.float32
+                ),
+                 'ON_time': spaces.Box(
+                    low=np.array([0.0]),
+                    high=np.array([5.0]),  # Placeholder max on time
+                    dtype=np.float32
+                ),
+                 'OFF_time': spaces.Box(
+                    low=np.array([0.0]),
+                    high=np.array([100.0]),  # Placeholder max off time
+                    dtype=np.float32
+                )
+            })
         })
         
-        self.previous_target_current = 0 # Store previous target current for reward calculation
+    def step(self, action):
+        # Track if this is a control step (every 1ms / 1000μs)
+        is_control_step = self.state.time_since_servo >= self.servo_interval
         
-        # Import modules here to avoid circular imports
-        import gymnasium as gym
-        from gymnasium import spaces
-        import numpy as np
-        from .edm_state import EDMState
-        from . import update_ignition
-        from . import update_material_removal
-        from . import update_dielectric
-        from . import update_wire
-        from . import update_mechanics
+        # Only process actions on control steps
+        if is_control_step:
+            self.state.target_delta = action['servo'][0]
+            self.state.target_voltage = action['voltage_control'][0]
+            self.state.target_current = action['current_control'][0]
+            self.state.time_since_servo = 0  # Reset timer
         
-        self._update_ignition = update_ignition.update_ignition
-        self._update_material_removal = update_material_removal.update_material_removal
-        self._update_dielectric = update_dielectric.update_dielectric
-        self._update_wire = update_wire.update_wire
-        self._update_mechanics = update_mechanics.update_mechanics
+        # Sequential process updates
+        self._update_ignition()
+        self._update_material_removal()
+        self._update_dielectric()
+        self._update_wire()
+        if self.state.is_wire_broken:
+            # If the wire is broken, return immediately
+            return None, 0, True, False, {'wire_broken': True}
+        self._update_mechanics()
         
-def step(self, action):
-    # Track if this is a control step (every 1ms / 1000μs)
-    is_control_step = self.state.time_since_servo >= self.servo_interval
-    
-    # Only process actions on control steps
-    if is_control_step:
-        self.state.target_delta = action['servo'][0]
-        self.state.target_voltage = action['voltage_control'][0]
-        self.state.target_current = action['current_control'][0]
-        self.state.time_since_servo = 0  # Reset timer
-    
-    # Sequential process updates
-    self._update_ignition()
-    self._update_material_removal()
-    self._update_dielectric()
-    self._update_wire()
-    if self.state.is_wire_broken:
-        # If the wire is broken, return immediately
-        return None, 0, True, False, {'wire_broken': True}
-    self._update_mechanics()
-    
-    # Update time trackers
-    self.state.time += self.dt
-    self.state.time_since_servo += self.dt
-    self.state.time_since_open_voltage += self.dt
-    
-    if self.state.spark_status[0] == 1:
-        self.state.time_since_spark_ignition += self.dt
-        self.state.time_since_spark_end = 0
-    else:
-        self.state.time_since_spark_end += self.dt
-        self.state.time_since_spark_ignition = 0
-    
-    # Only return meaningful observations and calculate rewards on control steps
-    if is_control_step:
-        observation = self._get_obs()
-        reward = self._calculate_reward()
-        self.previous_target_current = target_current  # Store for next timestep
-    else:
-        observation = None
-        reward = 0
-    
-    terminated = self._check_termination()
-    truncated = False
-    
-    info = {
-        'wire_broken': self.state.is_wire_broken,
-        'target_reached': self.state.is_target_distance_reached,
-        'spark_status': self.state.spark_status[0],
-        'time': self.state.time,
-        'is_control_step': is_control_step
-    }
-    
-    return observation, reward, terminated, truncated, info
+        # Update time trackers
+        self.state.time += self.dt
+        self.state.time_since_servo += self.dt
+        self.state.time_since_open_voltage += self.dt
+        
+        if self.state.spark_status[0] == 1:
+            self.state.time_since_spark_ignition += self.dt
+            self.state.time_since_spark_end = 0
+        else:
+            self.state.time_since_spark_end += self.dt
+            self.state.time_since_spark_ignition = 0
+        
+        # Only return meaningful observations and calculate rewards on control steps
+        if is_control_step:
+            observation = self._get_obs()
+            reward = self._calculate_reward()
+            self.previous_target_current = target_current  # Store for next timestep
+        else:
+            observation = None
+            reward = 0
+        
+        terminated = self._check_termination()
+        truncated = False
+        
+        info = {
+            'wire_broken': self.state.is_wire_broken,
+            'target_reached': self.state.is_target_distance_reached,
+            'spark_status': self.state.spark_status[0],
+            'time': self.state.time,
+            'is_control_step': is_control_step
+        }
+        
+        return observation, reward, terminated, truncated, info
