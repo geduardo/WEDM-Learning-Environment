@@ -37,7 +37,7 @@ There are 5 main modules in the simulation:
 - [[Ignition module]]: This module is responsible for simulating the ignition of the spark. It will be based on a probabilistic model of the ignition process.
 - [[Material removal module]]: This module is responsible for simulating the material removal process. It will be based on a probabilistic model of the material removal process.
 - [[Dielectric module]]: This module is responsible for simulating the dielectric fluid. After a succesful ignition, the conditions of the dielectric fluid change and this affects the process.
-- [[Wire module]]: This module focuses on the wire's physical state:
+- [[Wire status module]]: This module focuses on the wire's physical state:
     - Temperature distribution and thermal effects
     - Material properties and stress state
     - Breakage conditions and probability
