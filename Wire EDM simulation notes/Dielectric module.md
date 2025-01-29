@@ -14,20 +14,51 @@ The dielectric module is responsible for simulating the state and behavior of th
 
 ### Modeling approach
 
-For the current simulation, the dielectric module will be simplified to primarily act as a thermal bath for cooling the wire. We will assume a uniform dielectric temperature for now.
+The dielectric module implements a simplified model focusing on three key state variables:
 
-The dielectric will be modeled as a thermal reservoir with a uniform temperature. The wire will exchange heat with this reservoir, influencing the wire's average temperature. The dielectric temperature will be a state variable that can be updated by other modules in the future.
+1. **Debris Concentration** ($C_d$):  This variable represents the concentration of debris particles in the dielectric fluid within the inter-electrode gap. It starts at 0 at the beginning of the simulation or after a complete flushing cycle.  Instead of using a differential equation based on spark events per time unit, we directly increment the debris concentration with each spark, where the increment is now dependent on the material removed by the spark (crater volume), and decrement it based on the flow rate at each microsecond timestep.
 
-For now, electrical properties, fluid dynamics, and debris distribution will not be explicitly modeled. These aspects will be added in future iterations of the simulation.
+   - **Debris Accumulation:** For each spark event, the debris concentration $C_d$ is increased proportionally to the crater volume $V_c$ of that spark.  This is represented as $C_d \leftarrow C_d + \beta V_c$, where $\beta$ is a factor that scales the crater volume to the increase in debris concentration.  A larger crater volume (more material removed) will result in a greater increase in debris concentration.
+   - **Debris Decay:**  Simultaneously, the debris concentration decays at a rate proportional to the flow rate $f$.  This decay is modeled by reducing $C_d$ by a fraction $\gamma f$ of its current value at each timestep.
+
+   This can be conceptually represented as:
+
+   - Initialize $C_d = 0$
+   - At each timestep:
+     - If a spark occurred in this timestep with crater volume $V_c$: $C_d \leftarrow C_d + \beta V_c$
+     - Debris Decay: $C_d \leftarrow C_d \times (1 - \gamma f)$
+
+
+2. **Flow Rate** ($f$): This is a normalized parameter representing the dielectric fluid flow rate. It is non-dimensional and ranges from 0 to 1, where:
+   - $f = 0$ indicates no dielectric fluid flow.
+   - $f = 1$ represents the maximum or nominal dielectric fluid flow rate.
+   - Values between 0 and 1 represent proportional levels of flow rate between these extremes.
+   This normalized representation simplifies the model and allows for easy adjustment and interpretation of flow rate effects without needing to specify physical units.
+
+3. **Ionized Channel State**:  Models the condition where the inter-electrode gap becomes temporarily conductive after a spark, effectively acting as a short circuit for a brief period $\tau_{deionization}$.  This state signifies that the dielectric in the spark region remains ionized and highly conductive, facilitating current flow.  The location of the ionized channel is also recorded.
+   The dynamics are:
+
+   - \textbf{Initiation:} A spark event at location $y_{discharge}$ triggers the ionized channel state.
+   - \textbf{Duration:} The "conductive" condition persists for $\tau_{deionization}$ timesteps, during which the gap is conductive at $y_{discharge}$.
+   - \textbf{Deactivation:} After $\tau_{deionization}$, the ionization dissipates, the gap returns to its insulating state, and the Ionized Channel State becomes inactive.
+
 
 ### Integration with other modules
 
-The dielectric module will interact with the other modules in the Wire EDM simulation:
+The dielectric state interacts with other simulation modules through the following mechanisms:
 
-1. The ignition module will use the local fluid properties and debris concentration to determine the breakdown voltage and ignition probability.
-2. The material removal module will provide the source terms for debris generation based on the discharge energy and crater volume.
-3. The wire module will exchange heat with the fluid and affect the local flow field through its motion and vibration.
-4. The mechanics module will provide the boundary conditions for the fluid flow based on the machine motion and flushing system.
+1. **Ignition Module:**
+   - Debris concentration ($C_d$) directly affects short-circuit probability through contaminated dielectric
+   - Ionized channel state prevents new spark formation in recently discharged regions
+   - Dielectric conductivity influences breakdown voltage calculation
+   - Flow rate ($f$) modifies spark distribution by affecting debris accumulation patterns
 
-By capturing the essential physics and behavior of the dielectric fluid, the module will enable the simulation to predict the process dynamics and stability under various control 
-strategies and operating conditions. The modular approach allows for progressive refinement and validation of the fluid models based on experimental data and advanced simulations.
+2. **Wire Status Module:**
+   - Dielectric flow rate ($f$) determines convective cooling efficiency:
+     ```python
+     wire_temperature -= k_flow * f * (wire_temperature - dielectric_temperature)
+     ```
+3. **Mechanics Module:**
+    - Viscosity (dependent on temperature) determines drag forces on wire. This affects wire vibration and wire deflection dynamics. (Not implemented yet)
+    - Flow rate ($f$) determines the drag force on the wire, which affects wire deflection dynamics.
+    - Turbulence (not implemented yet) is a random force on the wire, which affects wire deflection dynamics.

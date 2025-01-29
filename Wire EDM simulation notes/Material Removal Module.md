@@ -122,7 +122,7 @@ $$\Delta x_w = \frac{V_c}{k \cdot h_w}$$
 
 Therefore, the workpiece position is updated as follows:
 
-$$x_w \leftarrow x_w - \Delta x_w = x_w + \frac{V_c}{k \cdot h_w}$$
+$$x_w \leftarrow x_w + \Delta x_w = x_w + \frac{V_c}{k \cdot h_w}$$
 
 > [!note]
 > This model makes an important simplifying assumption: the depth of material removal (and thus the kerf width) is approximately constant across different spark energies. While in reality there may be some variation in crater depth with energy, experimental evidence suggests this variation is relatively small compared to variations in crater volume.

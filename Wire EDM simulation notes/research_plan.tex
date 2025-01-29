@@ -1,0 +1,350 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage[margin=0.5in]{geometry}
+\usepackage{amsmath}
+\usepackage{amsfonts} 
+\usepackage[style=ieee]{biblatex}
+\addbibresource{references.bib}
+\usepackage[scaled]{helvet}
+\usepackage[T1]{fontenc}
+\renewcommand\familydefault{\sfdefault}
+\usepackage{imakeidx}
+\usepackage{color}
+\makeindex
+
+
+\date{}
+
+\begin{document}
+
+\title{%
+\\[1cm]
+Research plan: Learning-based control of Wire EDM machines
+}
+\author{Eduardo Gonzalez Sanchez}
+\date{}
+\maketitle
+
+%show the index of the content
+
+\begin{center}
+    \vspace{0.9cm}
+\textbf{Abstract}
+\end{center}
+
+\textit{This thesis aims to achieve two primary objectives: first, to develop a virtual environment that accurately simulates the Wire Electrical Discharge Machining (WEDM) main cut process for testing control strategies, and second, to explore and evaluate modern control approaches within this virtual environment, with special emphasis on learning-based and adaptive methods. The virtual environment will serve as a testbed for developing and validating control algorithms before their implementation in real WEDM machines. Through this environment, various control strategies will be investigated, focusing particularly on advanced techniques that can adapt to unknown process conditions and optimize machining performance. 
+The effectiveness of these control methods will be evaluated through key performance metrics including material removal rate, wire consumption, process stability within the simulated WEDM main cut process.}
+
+\section{Introduction}
+% insert image
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{wire-edm.png}
+    \caption{Schematic diagram of the WEDM process. }
+    \label{fig:wire_edm}
+    \end{figure}
+
+
+Electrical Discharge Machining (EDM) is a non-traditional machining process that uses electrical discharges to remove material from conductive workpieces. During the process, sequential electrical discharges between an electrode and workpiece create plasma channels reaching temperatures above 10000 K, melting and evaporating material which is then flushed away leaving craters. This contactless process can produce precise (1-10 $\mu m$) parts in hard conductive materials. Wire Electrical Discharge Machining (WEDM) (see Figure \ref{fig:wire_edm}) is a specific type of EDM using a continuously circulating wire electrode, typically brass or copper, as the cutting tool. The process depends on factors like dielectric medium, wire properties, workpiece characteristics, and control parameters. This technology is particularly valuable in manufacturing 
+precision components for industries such as aerospace, medical devices, and tool making, where high accuracy and the ability to 
+cut complex shapes in hard materials are essential requirements.
+
+
+The WEDM process consists of multiple cutting passes: a main cut (or rough cut) followed by trim and finishing cuts. The main cut removes the bulk material and establishes the primary shape, while subsequent passes refine dimensions and surface quality. This thesis focuses on the main cut process for two key reasons:
+
+\begin{enumerate}
+    \item The main cut is the most time and energy-intensive phase, typically consuming 50\% of the total machining time per part, so efficiency improvements here can substantially reduce overall process costs.
+    
+    \item Main cut offers readily available process feedback through continuous measurements of axis positions, wire consumption, and energy usage, making it ideal for real-time control optimization. Trim and finishing cuts, however, primarily rely on quality metrics that can only be assessed after machining is complete, making process optimization more challenging.
+\end{enumerate}
+
+
+The goal of this research is to develop control strategies for WEDM main cut that optimize material removal rate and wire consumption while maintaining stability. The approach involves creating a virtual environment to simulate the WEDM process and implementing learning-based control algorithms that adapt to process conditions using real-time feedback.
+
+\subsection{Main Cut Process Control in WEDM}
+
+In WEDM main cut, the primary control objective is to remove material as quickly as possible while minimizing wire consumption and preventing wire breakage. Achieving this goal requires managing a complex interplay of electrical, mechanical and thermal phenomena, all while maintaining a very narrow gap (10-100 $\mu m$) between the wire and workpiece. 
+
+Broadly, the WEDM control system consists of two main components operating on different timescales: the Electrical Pulse Generator (EPG) and the Servo System.
+
+\subsubsection{Electrical Pulse Generator (EPG) control}
+
+The Electrical Pulse Generator (EPG) is a critical component of the WEDM system, responsible for generating the high-frequency electrical discharges that enable material removal. The EPG delivers a series of short, high-energy pulses to the gap between the wire electrode and the workpiece, with typical pulse durations in the range of 2-3 $\mu s$ and inter-pulse intervals around 100 $\mu s$.
+
+The EPG is often controlled by several key parameters, including peak current, open circuit voltage, pulse duration, pulse off-time, and pulse shape. These parameters dictate the energy delivered per discharge, the frequency of these discharges, and the shape of the pulse, all of which directly influence the size and shape of the resulting craters on the workpiece and, consequently, the overall material removal rate. Precise control of these parameters is crucial to ensure stable and efficient machining. Excessive energy delivery can cause thermal overload, leading to wire breakage and process interruption. Conversely, insufficient off-time impedes the proper deionization of the machining gap, increasing the likelihood of inefficient discharges or short circuits. 
+
+The primary objective of EPG control is to optimize the delivery and frequency of pulses to achieve maximum material removal efficiency while ensuring process stability, minimizing wire consumption, and preventing wire breakage.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{pulse_generator2.png}
+    \caption{Schematic diagram of a typical wire EDM pulse sequence.}
+    \label{fig:pulse_generator}
+\end{figure}
+
+As shown in Figure \ref{fig:pulse_generator}, each pulse cycle in the EPG consists of three main phases:
+
+\begin{enumerate}
+    \item Ignition delay time ($\tau_D$): the time between the application of the open circuit voltage and the actual initiation of the discharge. This delay is stochastic in nature, influenced by factors such as the gap distance, open voltage magnitude, and the properties of the dielectric fluid.
+    
+    \item Discharge duration ($T_{ON}$): This is the period during which current flows through the plasma channel, as determined by the pulse generator settings.
+    
+    \item Off-time ($T_{OFF}$): This is the interval between discharges, which allows for the deionization of the dielectric fluid and the flushing of debris from the gap. 
+\end{enumerate}
+
+
+
+\subsubsection{Servo Feed Control System}
+
+The servo system in Wire EDM is typically a closed-loop feedback control system designed to maintain the inter-electrode gap distance close to the desired setpoint (typically between 10 and 100 $\mu$m). This is achieved by manipulating the relative position between the wire electrode and the workpiece along the machine axes. These systems typically operate at the millisecond timescale.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.7\textwidth]{proportional_controller.png}
+    \caption{Schematic diagram of a proportional controller for gap control, adapted from a commercial WEDM machine.}
+    \label{fig:proportional_controller}
+\end{figure}
+
+Proportional control is commonly employed for maintaining the inter-electrode gap. While variations of this approach exist depending on machining conditions, they are all fundamentally based on adjusting the position setpoint of the servo system. The controller calculates an error signal, typically derived from the difference between the desired setpoint and proxy measurements such as average gap voltage or ignition delay time. This error is then multiplied by a proportional gain to determine the necessary adjustment to the position setpoint. 
+
+The optimal proportional gain and setpoints for the process are determined heuristically by the manufacturer and stored in lookup tables for different process conditions. These tables account for factors such as workpiece material, thickness, and cutting conditions. More advanced implementations might also incorporate auxiliary signals, such as the number of short circuits detected in the previous cycle, into the control logic.
+
+\subsection{Challenges in WEDM Process Control}
+
+Apart from the EPG and the servo system, WEDM machines have several other control parameters that can be adjusted to optimize the process. These parameters interact in complex ways, and their optimal values depend on the specific workpiece material, geometry, and desired machining characteristics. Table \ref{tab:wedm_parameters} lists some of the key control parameters in modern WEDM machines.
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{p{3cm}p{6cm}}
+        \hline
+        Parameter Type & Control Parameters \\
+        \hline
+        Pulse Generator & Peak current, Open circuit voltage, Pulse duration, Pulse off-time, Current polarity, Open voltage polarity, Pulse shape \\
+        \hline
+        Wire Parameters & Wire tension, Wire unwinding speed, Wire size, Wire material \\
+        \hline
+        Servo System & Feed rate, Control gains, Gap setpoints\\
+        \hline
+        Dielectric System &  Fluid type, Pressure, Flushing conditions, Temperature, Conductivity, Turbidity, Viscosity\\
+        \hline
+    \end{tabular}
+    \caption{Control parameters in modern WEDM machines}
+    \label{tab:wedm_parameters}
+\end{table}
+
+The interaction between WEDM parameters is highly complex, and the process performance is highly sensitive to their values. For instance, the wire's thermal limits constrain the maximum power that can be delivered to the process. At a given power level, various pulse configurations are possible, such as using high-current pulses with long off-times or low-current pulses with shorter off-times. Although these configurations may impose a similar thermal load on the wire, the material removal rate will vary significantly depending on the properties of the workpiece material, which determine the size of the craters formed during the process. Additionally, the gap distance between the wire and the workpiece, which is controlled by the servo system, influences the material removal rate. The dielectric system also plays a role by affecting the flushing and cooling of the process. With numerous interacting parameters, determining the optimal configuration for a specific workpiece is a challenging task that requires extensive expertise and experience in the field of WEDM.
+
+\section{State of the art}
+
+This section reviews the state of the art in three key areas relevant to this thesis: control strategies for Wire EDM machines, simulation approaches for WEDM processes, and learning-based control methods. First, we examine current control approaches in commercial WEDM systems and recent research developments in control strategies. Then, we explore various simulation methodologies that have been developed to study and optimize WEDM processes. Finally, we review recent advances in learning-based control methods, particularly reinforcement learning, and their potential applications to manufacturing processes.
+
+
+\subsection{WEDM Control}
+
+Modern WEDM machines integrate multiple control loops that work together to manage the process. The servo system typically uses some form of proportional control while the pulse generator and wire transport modules each have dedicated control systems. These subsystems must coordinate effectively to achieve optimal machining performance.
+
+The complexity of WEDM control stems from the need to simultaneously manage multiple subsystems while adapting to changing process conditions. Traditional control approaches, which rely heavily on lookup tables and fixed parameters, have several limitations. They cannot easily adapt to new materials or cutting conditions without extensive experimental characterization, and they may not fully utilize the capabilities of modern high-speed electronics, sensors and new generator topologies.
+
+In response to these challenges, researchers in the late 1990s and early 2000s explored adaptive fuzzy control strategies for various WEDM subsystems. These approaches aimed to better handle the complex phenomena and stochastic nature of the EDM process. Notable contributions included Yan et al.'s adaptive fuzzy controller for real-time parameter adjustment \cite{yan1998adaptive}, Liao and Co.'s fuzzy logic controller \cite{liao2000design}, and Lee et al.'s adaptive neuro-fuzzy inference system \cite{lee2007adaptive}. A comprehensive review of these strategies can be found in Almeida et al. \cite{almeida2022servo}.
+
+Modern WEDM systems use high-speed FPGAs for pulse-by-pulse control and advanced monitoring systems to track discharge patterns \cite{SparkTrack}. These capabilities may enable better wire break prevention through coordinated control of subsystems, e.g. when hihg-risk discharge patterns are detected, the controller can rapidly reduce power parameters while simultaneously adjusting servo position and wire tension.
+
+However, despite the potential for these advanced technologies to enhance EDM performance, their adoption in commercial systems remains limited. This is primarily due to the significant technical burden of implementation - integrating these methods requires substantial investment in specialized hardware, software modifications, and personnel with interdisciplinary expertise. Furthermore, the inherent risks associated with unproven technologies in production environments contribute to the continued reliance on traditional control approaches based on lookup tables and independent subsystem control.
+
+
+\subsection{Simulation of WEDM Processes}
+
+While significant research has been conducted on WEDM simulation, the field currently lacks a dedicated environment for testing control strategies. Existing work has focused primarily on detailed physical modeling of specific process aspects - from thermal models of crater formation \cite{weingartner_modeling_2012} to electromagnetic force calculations \cite{di_campli_real-time_2020} and wire vibration analysis \cite{shibata_simulation_2022, sawada_development_2022}. These physics-based simulations have greatly advanced our fundamental understanding of WEDM mechanisms. However, their computational complexity and narrow focus on physical phenomena make them unsuitable for control system development and testing.
+
+Attempts to create comprehensive process models \cite{zivanovic_wire_2016} have demonstrated that the coupled physical phenomena in WEDM are extremely complex, making high-fidelity simulation computationally intensive and difficult to validate. More importantly, there is a clear gap in the availability of simulation tools specifically designed for rapid prototyping and evaluation of control strategies. This gap presents a significant barrier to advancing WEDM control technology, as researchers and developers lack an efficient platform for testing new control approaches. To address this limitation, there is a pressing need for a new simulation framework that prioritizes control-relevant dynamics and maintains computational efficiency suitable for iterative algorithm development.
+
+
+\subsection{Learning-Based Control}
+
+In the last decade, significant progress has been made in artificial intelligence, particularly in reinforcement learning. Mnih et al. presented a revolutionary approach by combining the classical Q-learning algorithm with deep neural networks, enabling an agent to learn to play Atari games at a human level \cite{mnih2015human}. Refined versions of this approach have demonstrated superhuman performance in complex computer games \cite{DBLP:journals/corr/abs-1712-01815, vinyals2019grandmaster}.
+
+These advancements are increasingly being applied to control engineering. Hwangbo et al. implemented an RL-based algorithm to control the rotor thrust of a quadrotor using orientation, position, and velocity data from drone sensors \cite{hwangbo2017control}. Trained in a physical simulation, the algorithm achieved an inference time of $7\,\mu s$, suitable for EDM applications where discharge times are $2$--$3\,\mu s$ with inter-discharge intervals of $\sim 100\,\mu s$. Similarly, the Soft Actor-Critic (SAC) algorithm was successfully applied to control a quadrupedal robot and a robotic dexterous hand, learning policies directly in real-world settings without simulation data \cite{DBLP:journals/corr/abs-1812-05905}. The quadrupedal robot learned to walk in approximately 2 hours of real-world training and displayed robustness to variations in terrain, such as inclined ramps and obstacles. Recently, Haarnoja et al. \cite{doi:10.1126/scirobotics.adi8022} demonstrated the ability of deep RL to synthesize sophisticated movement skills for a miniature humanoid robot playing soccer. Trained in simulation and successfully transferred to real robots, the learned agent exhibited robust and dynamic movements, outperforming a scripted baseline in various metrics. This work highlights the potential of deep RL in generating complex, task-specific behaviors for electro-mechanical systems.
+
+Additionally, asynchronous learning algorithms, i.e. algorithms that gather the
+experience of multiple agents to train the same instance of an algorithm, have
+been proven to provide robustness and better sampling efficiency over the same
+environment compared to single-agent traditional methods
+\cite{mnih2016asynchronous}. This is particularly relevant for EDM in the context of industrial 
+manufacturing, where fleets of machines are continuously performing similar or identical 
+tasks for mass production of components.
+
+
+\section{Research Objectives}
+
+The primary objectives of this thesis are:
+
+\begin{enumerate}
+    \item \textbf{Development of a Control-Oriented WEDM Simulation Framework:} Create a modular simulation environment focused on control-relevant aspects of main-cut WEDM operations, capturing key stochastic behaviors while maintaining computational efficiency to enable rapid development and validation of control strategies.
+
+    \item \textbf{Implementation of Learning based Control Methods:} Develop and evaluate advanced control strategies, with a focus on:
+    \begin{itemize}
+        \item Design of objective functions aligned with WEDM main cut objectives, such as maximizing material removal rate and minimizing wire breakage.
+        \item Formulation of the WEDM process as a Markov Decision Process (MDP), defining appropriate state and action spaces.
+        \item Investigation of state representations, using sensor data and features to capture process behavior.
+        \item Exploration of control architectures for robust control.
+        \item Development of online adaptation to handle process drift and material variations.
+    \end{itemize}
+
+
+\end{enumerate}
+
+
+A secondary objective of this thesis is to define a comprehensive roadmap for deploying these control methods in industrial machines, specifically addressing:
+\begin{itemize}
+    \item Real-time computing requirements for microsecond-scale control decisions
+    \item Sensor integration for state estimation and process monitoring
+    \item Safety constraints and fallback mechanisms
+    \item Scalable deployment across machine fleets
+\end{itemize}
+
+This thesis aims to bridge the gap between traditional and advanced control in main cut WEDM by developing a WEDM simulation framework, implementing learning-based control methods, and creating a roadmap for industrial deployment. Leveraging reinforcement learning and control theory, this research will evaluate the practical viability of advanced control strategies in a purpose-built simulation environment and establish guidelines for their implementation in production WEDM systems.
+
+\section{Description of the solution}
+
+\subsection{Control-Oriented WEDM Simulation Framework}
+
+This thesis proposes a stochastic, state-based simulation framework for WEDM that balances physical accuracy with computational efficiency. The framework is designed to be fast enough for reinforcement learning training while capturing the essential physics of the process, which involves complex coupled thermal, electrical, mechanical and fluid interactions. Built on the Gymnasium interface for compatibility with modern RL algorithms, the framework features a modular architecture that can be incrementally enhanced as WEDM process models improve and new experimental data becomes available. The simulation incorporates inherent randomness in key phenomena like discharge ignition and material removal to reflect the stochastic nature of the process.
+
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{simulation_modules.png}
+    \caption{Overview of the modular WEDM simulation framework showing five interconnected modules: ignition dynamics, material removal, dielectric behavior, wire mechanics, and machine kinematics. Each module uses simplified physics models with microsecond-scale state transitions.}
+    \label{fig:simulation_modules}
+\end{figure}
+
+The proposed design breaks down the WEDM process into five interconnected modules: ignition, material removal, dielectric, wire, and mechanics. Each module implements simplified models of the underlying phenomena, incorporating stochastic elements to capture the probabilistic nature of the process. The system evolution will be discretized at 1 $\mu s$ intervals to capture the relevant temporal dynamics, with state transitions described by the probability distribution $P(\mathbf{s}_{t+1}|\mathbf{s}_t)$ to model the stochastic progression between states.
+
+For the initial implementation, the focus will be on straight main cuts and critical phenomena like wire breakage prediction using X37CrMoV5-1 (1.2343) tool steel as the workpiece material. This hot-work tool steel is widely used in EDM research due to its consistent material properties and industrial relevance. The framework incorporates key physical models including thermal effects, electromagnetic forces, and fluid dynamics, though at a level of abstraction suitable for real-time control. The models will be validated against experimental data from AgieCharmilles CUT P350 and CUT E350 machines and refined iteratively. The modular architecture allows for improvement of individual components as understanding develops.
+
+
+\subsection{Learning based control: Wire EDM as a Markov Decision Process}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.5\textwidth]{RL loop.pdf}
+    \caption{General loop diagram of a RL based control algorithm for an EDM machine.}
+    \label{fig:RL_loop}
+\end{figure}
+
+Implementing learning-based control for WEDM requires modeling the process as a Markov Decision Process (MDP) (see Figure \ref{fig:RL_loop}). The key research areas for this implementation include:
+
+\begin{itemize}
+    \item \textbf{State Space Design:} The state space must capture the essential process dynamics through measurable signals like voltage and current between electrodes, while remaining computationally tractable for real-time control.
+    
+    \item \textbf{Reward Function Design:} The reward function will quantify the core WEDM objectives - maximizing material removal rate while preventing wire breakage. This requires careful balancing of competing objectives and appropriate temporal credit assignment.
+    
+    \item \textbf{Control Architecture:} The control system must coordinate generator control, servo control, and machine parameters like wire tension and unwinding speed. This can be achieved through multi-agent approaches where specialized controllers handle different subsystems, or hybrid architectures combining traditional control methods with learning-based approaches. The design involves creating appropriate network architectures and control hierarchies that can handle the different timescales effectively while enabling cooperation between controllers.
+    \item \textbf{Generalization Methods:} To ensure robust performance across different operating conditions, the system must generalize beyond its training conditions. This requires systematic investigation of generalization techniques in the WEDM context.
+    
+    \item \textbf{Online Adaptation:} The control system must adapt to changing process conditions and material properties. This involves developing methods to detect and compensate for process drift while maintaining stable performance.
+\end{itemize}
+
+
+\section{Progress to Date}
+
+% Key advancements have been made in several areas:
+
+\begin{enumerate}
+    \item \textbf{Simulation Wire EDM Environment:} A custom Gymnasium environment for WEDM has been developed implementing the five interconnected modules (ignition dynamics, material removal, dielectric behavior, wire mechanics, and machine kinematics). This Python-based framework serves as the foundational architecture that will be iteratively enhanced throughout the thesis duration through collaborative efforts within the research group. The environment enables efficient testing of reinforcement learning algorithms for WEDM control, providing a safe testbed for initial development and policy optimization before physical implementation.
+
+    \item \textbf{Publications:} Two papers have been authored that directly advance key aspects of the thesis:
+    \begin{itemize}
+        \item \textbf{"Automatic Characterization of WEDM Single Craters Through AI-Based Object Detection"} \cite{Gonzalez-Sanchez_2024ijat} (Published): This work develops a computer vision methodology for analyzing WEDM crater geometries and distributions. The resulting statistical characterization of material removal directly informs the stochastic models in the simulation framework's material removal module, enabling a more accurate simulation of the WEDM process.
+        
+        \item \textbf{"Improving Generalization of Robot Locomotion Policies via Sharpness-Aware Reinforcement Learning"} (under review): This paper introduces novel techniques for improving policy robustness in reinforcement learning. The methodology addresses a critical challenge in WEDM control - ensuring learned policies generalize effectively across different operating conditions and materials. The approach shows promise for bridging the simulation-to-reality gap, a key consideration when transferring policies trained in simulation to physical WEDM machines.
+
+    \end{itemize}
+
+\end{enumerate}
+
+
+\section{Research Plan}
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=1\textwidth]{Ganntt-2nd.png}
+        \caption{Time plan of the project}
+        \label{fig:Gantt}
+    \end{figure}
+
+
+This thesis project spans from Q4 2023 to Q4 2026, organized into four main work packages (WP):
+
+\subsection{Work Packages}
+
+\begin{itemize}
+    \item \textbf{WP1: Literature Review and Problem Definition (Q4 2023 - Q2 2024)} [Completed]
+        \begin{itemize}
+            \item \textbf{Research Activities:}
+                \begin{itemize}
+                    \item Comprehensive review of WEDM control strategies
+                    \item Analysis of simulation approaches for EDM processes
+                    \item Survey of learning-based control methods
+                \end{itemize}
+            \item \textbf{Deliverables:}
+                \begin{itemize}
+                    \item Conference paper on sharpness-aware RL for improved generalization (Q3 2024)
+                \end{itemize}
+        \end{itemize}
+
+    \item \textbf{WP2: Simulation Framework Development (Q2 2024 - Q2 2025)} [In Progress]
+        \begin{itemize}
+            \item \textbf{Research Activities:}
+                \begin{itemize}
+                    \item Development of modular Gymnasium environment
+                    \item Implementation of five core simulation modules
+                    \item Validation against historical experimental data
+                \end{itemize}
+            \item \textbf{Deliverables:}
+                \begin{itemize}
+                    \item Open-source simulation framework (Q1 2025)
+                    \item Conference paper on simulation framework (Q1 2025)
+                \end{itemize}
+        \end{itemize}
+
+    \item \textbf{WP3: Learning-Based Control Development (Q1 2025 - Q4 2025)}
+        \begin{itemize}
+            \item \textbf{Research Activities:}
+                \begin{itemize}
+                    \item Design and implementation of MDP formulation
+                    \item Development of reward functions and state representations
+                    \item Implementation and comparison of multiple learning algorithms
+                    \item Robustness and generalization studies
+                \end{itemize}
+            \item \textbf{Deliverables:}
+                \begin{itemize}
+                    \item Journal paper on learning-based control methods for WEDM (Q4 2025)
+                \end{itemize}
+        \end{itemize}
+
+    \item \textbf{WP4: Industrial Implementation Framework (Q1 2026 - Q4 2026)}
+        \begin{itemize}
+            \item \textbf{Research Activities:}
+                \begin{itemize}
+                    \item Hardware specification and requirements analysis
+                    \item Machine modification assessment
+                    \item Industrial feasibility study
+                    \item Implementation planning with industrial partner
+                \end{itemize}
+            \item \textbf{Deliverables:}
+                \begin{itemize}
+                    \item Business case and implementation guide for industry partners (Q2 2026)
+                    \item Journal paper on implementation roadmap and guidelines (Q3 2026)
+                    \item PhD thesis (Q4 2026)
+                \end{itemize}
+        \end{itemize}
+\end{itemize}
+
+
+\printbibliography
+
+\end{document}  

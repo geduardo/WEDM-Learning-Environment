@@ -148,16 +148,9 @@ To address this, we investigated methods to detect when the wire approaches its 
 
 #### 4.1 Methodology for Discharge Pulse Analysis
 
-We conducted experiments to analyze discharge pulse patterns under various conditions:
-- Workpiece thicknesses: 10-150 mm
-- Wire diameters: 0.2-0.3 mm
-- Coolant nozzle configurations:
-  - Both nozzles in contact with workpiece ("close")
-  - Only lower nozzle in contact ("upper open") 
-  - Neither nozzle in contact ("both open")
-  - Only upper nozzle in contact ("lower open")
+To investigate how discharge pulses arise, experiments were conducted under conditions where plate thickness ranged from 10 mm to 150 mm, and wire diameter ranged from 0.2 mm to 0.3 mm. The machining-fluid nozzles were set in one of four configurations—both upper and lower nozzles in close contact with the workpiece (“close contact”), only the lower nozzle in contact (“upper separated”), neither nozzle in contact (“both separated”), or only the upper nozzle in contact (“lower separated”), as shown in Table 4—and the discharge frequency was varied.
 
-The discharge frequency was varied using a 60mm thick workpiece as reference, starting with the highest energy settings from manufacturer specifications for each wire diameter. We modified frequencies by adding variable pause times between pulses, controllable via external PC. The pause time was gradually reduced from 40μs to 30s in 2μs increments while recording normal discharge pulses over 100ms intervals.
+As for the discharge frequency, we took the standard conditions for each wire diameter provided by the manufacturer and used the condition for 60 mm plate thickness (which has the highest machining energy) for all plate thicknesses. We then varied the frequency by inserting an additional pause after each discharge pulse. Concretely, we made it possible to set the additional pause from an external computer. The output from the machining power supply’s oscillator was input to a counter board in the computer so that it could count the discharge pulses. Starting from an additional pause of 40 μs, we gradually shortened this pause by 2 μs increments every 30 s to increase the machining energy, and recorded the number of normal discharge pulses that occurred within a 100 ms interval under those conditions
 
 #### 4.2 Impact of Coolant Nozzle Configuration on Discharge Patterns
 
@@ -184,40 +177,42 @@ Figure 11 demonstrates similar patterns for a 20mm workpiece, comparing "close" 
 
 #### 5.1 Off-Time Control Algorithm
 
-From the fact that the number of normal discharge pulses does not increase much even when the additional pause time is shortened when approaching the breakage limit, it was hypothesized that the breakage limit state immediately before breakage can be maintained by comparing the measured number of normal discharge pulses with the number of normal discharge pulses in the nozzle close state. Based on this hypothesis, the following machining control algorithm was constructed.
+Analysis of discharge patterns revealed that as the wire approaches its breakage limit, increasing the pulse frequency (by reducing pause time) does not significantly increase the number of normal discharges. This observation led to the development of a control algorithm that maintains safe operation by comparing the actual number of normal discharges to the expected number under optimal conditions (nozzles in close contact).
 
-Fig. 12 shows a schematic diagram of the relationship between the additional pause time and the number of normal discharge pulses when the machining fluid nozzle is in close contact, upper or lower separated, and both separated. For convenience, if these are referred to as characteristic curves, the slope of these characteristic curves becomes gradual near the breakage limit, so that a new curve that intersects at the breakage limit immediately before breakage for each characteristic curve can be drawn, as indicated by the dashed line in Fig. 12. Therefore, if this line is regarded as a threshold curve, the additional pause time corresponding to the measured number of normal discharge pulses can be obtained from the threshold curve as shown in Fig. 13, and the additional pause time can be set for the next control cycle. If the number of normal discharge pulses is greater than the threshold value, the additional pause time is shortened, and if it is less, the additional pause time is lengthened. Therefore, the operating point, which takes the additional pause time and the number of normal discharge pulses as coordinates, moves towards the vicinity of the intersection of the characteristic curve corresponding to the nozzle condition and the threshold curve. This makes it possible to maintain the machining process while maintaining energy input near the wire breakage limit. In addition, when the machining fluid flow conditions change during machining, the operating point moves to a new characteristic curve corresponding to the changed conditions. Thus, because the operating point is controlled to be the intersection with the threshold curve, processing that minimizes the reduction in machining speed caused by the wire breakage prevention operation can always be realized.
+Figure 12 illustrates the relationship between pause time and normal discharge count for different nozzle configurations (close contact, upper separated, lower separated, and both separated). These characteristic curves share a common property - their slopes become more gradual near the breakage limit. This allows us to define a threshold curve (shown as a dashed line) that intersects each characteristic curve at its respective breakage limit point.
 
-The characteristic curve varies depending on the workpiece thickness, so it is necessary to detect the workpiece thickness during processing. This time, the method proposed by Yafuku et al. was used. Specifically, assuming that the machining groove width is constant, the machining energy (i.e., the average current during machining) and the machining volume (i.e., the product of the workpiece thickness and the machining speed) are considered to be proportional. The workpiece thickness was calculated by dividing the average current during machining calculated from the number of discharge pulses by the machining speed.
+Using this threshold curve, the control system can dynamically adjust the pause time based on the measured number of normal discharges, as shown in Figure 13:
+- If discharge count exceeds the threshold: decrease pause time
+- If discharge count falls below threshold: increase pause time
+
+This creates a self-regulating system where the operating point (defined by pause time and discharge count) naturally moves toward the intersection of:
+1. The characteristic curve for current nozzle conditions
+2. The threshold curve
+
+This approach ensures machining occurs at maximum safe energy levels while automatically adapting to changing conditions. When coolant flow conditions change during machining, the operating point shifts to the new characteristic curve but maintains safe operation by finding the new intersection with the threshold curve.
+
+Since workpiece thickness affects the characteristic curves, real-time thickness detection is necessary. We implemented the method proposed by Yafuku et al., which calculates thickness by:
+1. Assuming constant kerf width
+2. Recognizing that machining energy (average current) is proportional to machining volume (thickness × speed)
+3. Computing thickness as the ratio of average current to machining speed
 
 #### 5.2 Control Results
 
-First, the results of an experiment to confirm the operation of these algorithms are shown. The control algorithm was implemented in the personal computer of the experimental apparatus, and the additional pause time set during the machining of a workpiece with the cross-sectional shape shown in Fig. 14 was monitored. The wire was brass ø0.25mm, and the workpiece was Steel. The machining direction was set to the direction of decreasing thickness, where wire breakage tends to occur. The transition of the additional pause time is shown in Fig. 15. It can be seen that the additional pause time is automatically changed according to the machining fluid flow conditions and the workpiece thickness, such as the approaching part, the part where the nozzles are in contact, the stepped part, and the part where the nozzles are both separated.
+Initial testing used the cross-sectional workpiece shown in Figure 14, machined with a 0.25mm brass wire on steel. The machining direction was set from thick to thin sections, which typically presents higher risk of wire breakage. Figure 15 shows how the system automatically adjusted pause time to accommodate different conditions including:
+- Approach sections
+- Nozzle contact regions
+- Step changes in thickness
+- Sections with separated nozzles
 
-Next, these algorithms were implemented in the NC device of the machining machine and the machining performance when the workpiece thickness, nozzle installation conditions, and machining fluid flow conditions change was evaluated. The experiment used the machining conditions shown in Table 5, and the machining speeds of the conventional control algorithm and the new control algorithm were compared. The shape of the workpiece used in the submerged machining experiment was selected to include both a part where the nozzle is in contact and a part where the plate is very thin, as shown in Fig. 16. The machining results are shown in Table 6. With the new control algorithm, the machining speed was improved by 24% as a result of increased processing speed in the part where the nozzle is in contact. In the blowing-off machining experiment where the workpiece is not immersed in the machining fluid, the flow conditions of the machining fluid are considered to deteriorate. Thus, the cross-sectional shape shown in Fig. 17 was targeted. Since the two holes arranged vertically have the machining fluid almost removed from them, it was necessary to reduce machining energy extremely in conventional control with fixed machining conditions, because wire breakage was very likely to occur.
+The algorithm was then implemented in the machine's NC controller for comprehensive testing under varying conditions. Table 5 shows the test parameters used to compare machining speeds between conventional and new control methods.
 
-|    |      |
-|:------|:---------------------|
-| **Table 5**   | **Conditions for evaluation**  |
-| **WEDM** | FA20 (submerged)    RA90 (not submerged)     |
-| **Wire**  | Brass $0.2       |
-| **Workpiece**  | Steel     |
+Two scenarios were tested:
+1. Submerged machining: Using the workpiece geometry in Figure 16, which includes both nozzle-contact and thin-plate sections
+2. Non-submerged machining: Using the geometry in Figure 17, featuring two vertical holes where coolant flow is severely restricted
 
-|   |      |  |
-|:---:|:----------------------|:--:|
-| **Table 6**   | **Submerged test result** |   |
-| **Method**   | **Time**    | **ratio**  |
-| **Conventional**  | 54'34"   | 1.00  |
-| **New**  | 43'55"   | 1.24   |
-
-|   |      |  |
-|:---:|:----------------------|:--:|
-| **Table 7**   | **Not submerged test result** |   |
-| **Method**   | **Time**   | **ratio**  |
-| **Conventional**  | 107'20"   | 1.00   |
-| **New**  | 37'00"   | 2.90  |
-
-The results are shown in Table 7. The new control algorithm performed the minimum necessary wire breakage avoidance operations according to the machining fluid flow conditions, and improved machining speed by about 3 times for the difficult to machine shape.
+Results showed significant improvements:
+- Submerged machining: 24% faster overall, mainly due to higher speeds in nozzle-contact regions (Table 6)
+- Non-submerged machining: Nearly 3x faster, particularly in difficult-to-machine areas where conventional control required extremely conservative settings (Table 7)
 
 ---
 
