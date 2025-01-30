@@ -61,144 +61,96 @@
 
 
 
+# 1D Wire Thermal Model Proposal
 
+## Model Components
 
+### 1. Geometry Discretization
+The wire is divided into N discrete segments along its length (y-axis) to enable numerical simulation. Each segment represents a small portion of the wire and tracks:
+- Position yᵢ: Location along wire length [m]
+- Length Δy: Size of segment [m] 
+- Cross-sectional area S = πr²: Area perpendicular to wire axis [m²]
+- Surface area A = 2πrΔy: Area exposed to dielectric [m²]
+- Temperature Tᵢ: Local temperature of segment [K]
 
+### 2. Heat Generation Terms
 
-
-
-
-
-
-
-
-## Drafting
-
-## 1D Thermal Model for Wire EDM Breakage Prediction
-
-### Fundamental Assumptions
-
-1. Wire Geometry: Model wire as 1D rod along y-axis (wire length direction)
-
-2. Heat Transfer Mechanisms:
-
-    - Conduction along wire (y-direction)
-    - Convection to dielectric fluid
-    - Adiabatic boundary at wire ends
-    - Joule heating from discharge current
-
-3. Discharge Characteristics:
-
-    - Stochastic spark distribution (Poisson process)
-    - Energy deposition per spark follows Kunieda's concentrated discharge observations
-    - Spark locations follow observed discharge concentration patterns
-
-### 2. Governing Equation
-
-Modified Heat Equation with Moving Wire:
-
-$$\frac{\partial T}{\partial t} = \underbrace{\alpha\frac{\partial^2 T}{\partial y^2}}_{\text{Conduction}} - \underbrace{v_w\frac{\partial T}{\partial y}}_{\text{Advection}} + \underbrace{\frac{Q_{\text{joule}} + Q_{\text{process}}}{\rho c_p}}_{\text{Sources}} - \underbrace{h(T-T_0)}_{\text{Cooling}}$$
-
+#### a) Plasma Heating (Q_plasma)
+When a spark occurs at position yₛ, it transfers thermal energy to the wire:
+$$Q_{plasma} = \eta_{plasma}E_{discharge}/\Delta t$$
 Where:
+- η_plasma (0.3-0.5): Efficiency of energy transfer from plasma to wire
+- E_discharge = V⋅I⋅Δt: Total energy of a single spark [J]
+- Δt: Simulation timestep [s]
 
-- $T(y,t)$: Temperature distribution
-- $v_w$: Wire feed velocity
-- $\alpha$: Thermal diffusivity
-- $h$: Convective cooling coefficient
-- $Q_{\text{joule}} = I^2R/L$: Joule heating per unit length
-- $Q_{\text{process}}$: Discharge energy input
-
-### 3. Discharge Energy Model
-
-From Kunieda's observations:
-
-$$Q_{\text{process}} = \sum_{i} \frac{E_{\text{spark}}}{\tau\sqrt{2\pi}}e^{-\frac{(y-y_i)^2}{2\sigma^2}}$$
-
-- $E_{\text{spark}} = \int_0^{\tau} V(t)I(t)dt$ (Single spark energy)
-- $y_i$: Spark locations (Poisson distributed)
-- $\sigma$: Discharge concentration parameter (from paper Table 2)
-
-### 4. Breakage Criterion
-
-From Schacht's wire model:
-
-$$\exists y \ s.t.\ T(y,t) \geq T_{\text{crit}} = T_{\text{melt}} - \Delta T_{\text{safety}}$$
-
+#### b) Joule Heating (Q_joule) 
+Resistive heating occurs as current flows through wire:
+$$Q_{joule} = I^2R_{segment}$$
+$$R_{segment} = \rho_{elect}(T)\cdot\Delta y/S$$
 Where:
+- ρ_elect(T): Temperature-dependent electrical resistivity [Ω·m]
+- I: Current flowing through wire [A]
 
-- $T_{\text{melt}}$: Wire material melting point
-- $\Delta T_{\text{safety}}$: Empirical safety margin (from Kunieda's Table 5)
+### 3. Heat Loss Terms
 
-### 5. Stochastic Elements
+#### a) Convective Cooling (Q_conv)
+Heat transfer to surrounding dielectric fluid:
+$$Q_{conv} = h\cdot A\cdot(T_i - T_{dielectric})$$
 
-- Spark Ignition:
-    - Probability $P_{\text{ignition}} \propto \frac{V^2}{d^2}\cdot f(\text{debris})$
-    - Follows hazard function from ignition module
+#### b) Conductive Cooling (Q_cond)
+Heat spreading along wire length between segments:
+$$Q_{cond} = \frac{k(T)\cdot S}{\Delta y}(T_{i-1} - 2T_i + T_{i+1})$$
 
-- Discharge Location:
-    - Clustering tendency modeled with Markov process:
-    $$P(y_{i+1}|y_i) \sim \mathcal{N}(y_i, \sigma_c)$$
-    - $\sigma_c$: Concentration parameter from Kunieda's Fig 2-4
+#### c) Wire Transport Cooling (Q_transport)
+Heat removed by physical movement of wire:
+$$Q_{transport} = \rho c_pv_D(T_{i-1} - T_i)\cdot S/\Delta y$$
 
-### 6. Numerical Implementation Strategy
+### 4. Temperature Evolution Equation
+The rate of temperature change for each segment is determined by the sum of heat terms:
+$$\rho c_p\frac{\partial T_i}{\partial t} = \frac{Q_{plasma} + Q_{joule} - Q_{conv} + Q_{cond} + Q_{transport}}{S\Delta y}$$
 
-| Aspect | Approach | Reference |
-|---|---|---|
-| Spatial Discretization | Finite Difference (0.1mm segments) | Schacht's diameter analysis |
-| Temporal Integration | Explicit Euler (1μs steps) | Ignition module timing |
-| Advection Handling | Upwind scheme | Wire velocity ~10m/s |
-| Breakage Detection | Real-time max temp monitoring | Kunieda's observation window |
+### 5. Numerical Implementation
 
-### 7. Key Parameters
+#### Finite Difference Scheme (Explicit)
+The temperature is updated each timestep using forward Euler integration:
+$$T_i^{n+1} = T_i^n + \frac{\Delta t}{\rho c_p}[ \frac{Q_{plasma} + Q_{joule}}{S\Delta y} - \frac{hA}{S\Delta y}(T_i^n - T_{dielectric}) + \frac{k}{(\Delta y)^2}(T_{i-1}^n - 2T_i^n + T_{i+1}^n) + \frac{v_D}{\Delta y}(T_{i-1}^n - T_i^n) ]$$
 
-From Experimental Data:
+### 6. Boundary Conditions
+The wire temperature is constrained at its ends:
+- Entry point (y=0): Fixed at ambient temperature as new wire enters (we neglect the heating of the wire due to conduction outside of the contacts
+- Exit point (y=L): Fixed at ambient temperature (we assume wire outside contacts cools fast )
 
-\begin{array}{l|l|l}
-\text{Parameter} & \text{Value} & \text{Source} \\
-\hline
-\alpha_{\text{brass}} & 3.5\times10^{-5} m^2/s & \text{Schacht Ch.III} \\
-h_{\text{dielectric}} & 5\times10^4 W/m^2K & \text{Kunieda Table 2} \\
-T_{\text{melt}} & 1180K & \text{Wire specs} \\
-\sigma_c & 0.2-1.0mm & \text{Kunieda Fig 2-4} \\
-E_{\text{spark}} & 0.1-1mJ & \text{Schacht Eq.III.7} \\
-\end{array}
+### 7. Wire Break Criteria
+Wire failure is checked at each segment using three mechanisms:
+1. **Melting Threshold**: Immediate break if temperature exceeds melting point
+2. **Ductile Failure**: Break occurs after sustained exposure to critical temperature
+3. **Thermal Stress**: Break due to excessive temperature gradient causing material stress
 
-### 8. Model Validation Approach
+### 8. Required Parameters
 
-1. Static Validation:
-    - Compare steady-state temp profile with Schacht's analytical solutions
-    - Verify breakage thresholds against Table 5 (Kunieda)
+| Parameter | Symbol | Typical Value |
+|-----------|--------|---------------|
+| Density | ρ | 8900 kg/m³ (Cu) |
+| Specific heat | c_p | 385 J/kg·K |
+| Thermal conductivity | k | 400 W/m·K |
+| Convection coeff | h | 500-5000 W/m²K |
+| Wire velocity | v_D | 0.1-10 m/s |
+| Wire radius | r | 0.05-0.25 mm |
 
-2. Dynamic Validation:
-    - Match discharge concentration patterns from Fig 2-4
-    - Reproduce temperature oscillation frequencies from dirty.ipynb
+### 9. Implementation Strategy
 
-### 9. Simulation Process Flow
+1. Create wire temperature array in EDMState
+2. Add thermal properties to material database
+3. Create ThermalModule class with:
+   - Heat source calculations
+   - Finite difference solver
+   - Break detection
+4. Connect to existing spark tracking
 
-Initialize $T(y,0) = T_{\text{ambient}}$
 
-↓
 
-While $t < t_{\text{max}}$ and not broken:
 
-    ↓
 
-    [Stochastic Spark Generation]
 
-    ↓
 
-    [Solve Heat Equation]
 
-    ↓
-
-    [Update Wire Position]
-
-    ↓
-
-    Check $\max(T) > T_{\text{crit}} \rightarrow$ Break
-
-    ↓
-
-    $t += \Delta t$
-
-This model captures the essential thermal dynamics while maintaining computational efficiency for real-time simulation. Would you like me to elaborate on any particular aspect or propose specific numerical implementation details?
