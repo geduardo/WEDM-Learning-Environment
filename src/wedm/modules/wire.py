@@ -45,16 +45,16 @@ class WireModule(EDMModule):
             )
 
         # Material props (brass default)
-        self.rho = 8400        # kg m⁻³
-        self.cp = 377          # J kg⁻¹ K⁻¹
-        self.k = 120           # W m⁻¹ K⁻¹
+        self.rho = 8400  # kg m⁻³
+        self.cp = 377  # J kg⁻¹ K⁻¹
+        self.k = 120  # W m⁻¹ K⁻¹
         self.rho_elec = 6.4e-8
         self.alpha_rho = 0.0039
 
         self.h_conv = 14_000
         self.eta_plasma = 0.1
 
-        self.delta_y = self.seg_L * 1e-3     # [m]
+        self.delta_y = self.seg_L * 1e-3  # [m]
         self.S = np.pi * (self.r_wire * 1e-3) ** 2
         self.A = 2 * np.pi * (self.r_wire * 1e-3) * self.delta_y
         self.k_cond = self.k * self.S / self.delta_y
@@ -64,6 +64,16 @@ class WireModule(EDMModule):
     def update(self, state: EDMState) -> None:
         if state.is_wire_broken:
             return
+
+        # Initialize wire temperature array if it's empty
+        if len(state.wire_temperature) == 0:
+            state.wire_temperature = np.full(
+                self.n_segments, self.spool_T, dtype=np.float32
+            )
+
+        # Initialize spark_status if it's not properly set
+        if not state.spark_status or len(state.spark_status) < 3:
+            state.spark_status = [0, None, 0]
 
         T = state.wire_temperature
         I = state.current or 0.0

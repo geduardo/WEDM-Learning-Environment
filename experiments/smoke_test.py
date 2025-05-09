@@ -13,12 +13,12 @@ from collections import defaultdict
 
 import numpy as np
 
-#   ↳ makes "import edm_env" work if you haven't installed the package yet
+# Make "import edm_env" work if you haven't installed the package yet
 import sys, pathlib
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from wedm.envs import WireEDMEnv
+from src.wedm.envs import WireEDMEnv
 
 
 def constant_gap_controller(env: WireEDMEnv, desired_gap: float = 15.0):
@@ -43,6 +43,14 @@ def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
     env.state.workpiece_position = 100.0  # µm
     env.state.wire_position = 30.0  # µm
     env.state.target_position = 5_000.0  # µm
+
+    # Initialize other state variables for safety
+    env.state.spark_status = [0, None, 0]
+    env.state.dielectric_temperature = 293.15  # Room temperature in K
+
+    # Initialize the wire temperature array if not already
+    if len(env.state.wire_temperature) == 0:
+        env.wire.update(env.state)  # This should initialize the wire temperature array
 
     log = defaultdict(list)
     t0 = time.time()

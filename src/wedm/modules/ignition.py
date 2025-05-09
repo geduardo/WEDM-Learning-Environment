@@ -18,10 +18,10 @@ class IgnitionModule(EDMModule):
     # Public
     # ------------------------------------------------------------------ #
     def update(self, state: EDMState) -> None:
-        target_voltage = state.target_voltage
-        peak_current = state.peak_current
-        
-        #TODO
+        target_voltage = state.target_voltage or 80.0  # Default values if None
+        peak_current = state.peak_current or 300.0  # Default values if None
+
+        # TODO
         ON_time = state.ON_time or 3
         OFF_time = state.OFF_time or 80
 
@@ -85,8 +85,8 @@ class IgnitionModule(EDMModule):
         # At this point, state.wire_position < state.workpiece_position,
         # so (state.workpiece_position - state.wire_position) is positive.
         gap = state.workpiece_position - state.wire_position
-        
+
         if gap not in self.lambda_cache:
             self.lambda_cache[gap] = np.log(2) / (0.48 * gap**2 - 3.69 * gap + 14.05)
-        
+
         return self.lambda_cache[gap]
