@@ -10,11 +10,11 @@ from ..core.state import EDMState
 class MechanicsModule(EDMModule):
     """2nd-order servo axis with accel/jerk saturation."""
 
-    omega_n = 100.0      # rad s⁻¹
+    omega_n = 100.0  # rad s⁻¹
     zeta = 0.75
-    max_accel = 0.1 * 9.81 * 1e6        # [µm s⁻²]
-    max_jerk = 300 * max_accel          # [µm s⁻³]
-    max_speed = 3e6                     # [µm s⁻¹]
+    max_accel = 0.1 * 9.81 * 1e6  # [µm s⁻²]
+    max_jerk = 300 * max_accel  # [µm s⁻³]
+    max_speed = 3e6  # [µm s⁻¹]
 
     def __init__(self, env):
         super().__init__(env)

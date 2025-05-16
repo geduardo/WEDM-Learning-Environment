@@ -21,7 +21,7 @@ sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 from src.wedm.envs import WireEDMEnv
 
 
-def constant_gap_controller(env: WireEDMEnv, desired_gap: float = 15.0):
+def constant_gap_controller(env: WireEDMEnv, desired_gap: float = 20.0):
     """Very naive hand-crafted policy ↩ returns a Gym-style action dict."""
     delta = env.state.workpiece_position - desired_gap - env.state.wire_position
     return {
@@ -35,7 +35,7 @@ def constant_gap_controller(env: WireEDMEnv, desired_gap: float = 15.0):
     }
 
 
-def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
+def run_episode(max_steps: int = 1_000_000, seed: int = 0, verbose: bool = False):
     env = WireEDMEnv()
     env.reset(seed=seed)
 
@@ -55,10 +55,17 @@ def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
     log = defaultdict(list)
     t0 = time.time()
 
+    # Initialize action before the loop
+    action = constant_gap_controller(env)
+
     for k in range(max_steps):
-        action = constant_gap_controller(env)
+        # action = constant_gap_controller(env) # Old: called every step
 
         obs, rew, term, trunc, info = env.step(action)
+
+        # If a control step was just processed, get the next action
+        if info.get("control_step", False):  # Use .get for safety
+            action = constant_gap_controller(env)
 
         # ─── logging (only a few key signals for now) ───────────────────
         log["time"].append(env.state.time)
@@ -67,7 +74,9 @@ def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
         log["wire_pos"].append(env.state.wire_position)
         log["workpiece_pos"].append(env.state.workpiece_position)
 
-        if verbose and info["control_step"]:
+        if (
+            verbose and info["control_step"]
+        ):  # Note: 'control_step' might not be in info
             print(
                 f"[{env.state.time/1000:.1f} ms] "
                 f"gap={env.state.workpiece_position-env.state.wire_position:6.1f} µm   "
@@ -75,16 +84,45 @@ def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
             )
 
         if term or trunc:
-            reason = "target reached" if info["target_reached"] else "wire broken"
-            print(f"\n💥 Terminated at t={env.state.time} µs ({reason}).")
+            # Original logic for determining reason string
+            reason_str = "unknown"
+            if info.get("target_reached", False):
+                reason_str = "target reached"
+            elif info.get("wire_broken", False):
+                reason_str = "wire broken"
+            elif term:
+                reason_str = "terminated"
+            elif trunc:
+                reason_str = "truncated"
+            print(f"\n💥 Terminated at t={env.state.time} µs ({reason_str}).")
             break
 
-    sim_time = time.time() - t0
-    print(
-        f"Simulated {len(log['time']):,} µs in {sim_time:.2f} s "
-        f"→ {len(log['time'])/sim_time/1e6:.1f} × realtime."
-    )
-    return log
+    sim_time_wall_clock = time.time() - t0
+
+    total_simulated_us = 0
+    if log["time"]:  # Ensure log["time"] is not empty
+        total_simulated_us = log["time"][-1]  # Actual total simulated time in µs
+
+    # Original print statement in run_episode, using total_simulated_us
+    if sim_time_wall_clock > 0 and total_simulated_us > 0:
+        speed_factor = (
+            total_simulated_us / sim_time_wall_clock / 1e6
+        )  # sim_seconds / real_seconds
+        print(
+            f"Simulated {total_simulated_us:,} µs ({total_simulated_us / 1e3:.2f} ms) in {sim_time_wall_clock:.2f} s "
+            f"→ {speed_factor:.1f} × realtime."
+        )
+    elif total_simulated_us > 0:  # sim_time_wall_clock is <= 0
+        print(
+            f"Simulated {total_simulated_us:,} µs ({total_simulated_us / 1e3:.2f} ms) in {sim_time_wall_clock:.2f} s. "
+            "(Wall clock time too short to calculate speed factor reliably)."
+        )
+    else:  # total_simulated_us is 0
+        print(
+            f"Simulation ran for {sim_time_wall_clock:.2f} s, but no simulation steps were logged or simulation time was zero."
+        )
+
+    return log, sim_time_wall_clock, total_simulated_us
 
 
 # --------------------------------------------------------------------------- #
@@ -93,14 +131,33 @@ def run_episode(max_steps: int = 100_000, seed: int = 0, verbose: bool = False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Wire-EDM smoke test")
     parser.add_argument(
-        "--steps", type=int, default=100_000, help="µs to simulate (default: 100 000)"
+        "--steps", type=int, default=1_000_000, help="µs to simulate (default: 100 000)"
     )
     parser.add_argument(
         "--plot", action="store_true", help="Show a quick Matplotlib plot at the end"
     )
+    # Add verbose argument for consistency, though not strictly required by prompt
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print verbose output during simulation"
+    )
     args = parser.parse_args()
 
-    traces = run_episode(max_steps=args.steps)
+    traces, wall_time_s, sim_time_us = run_episode(
+        max_steps=args.steps, verbose=args.verbose
+    )
+
+    # New print statement for performance metric: real seconds per simulated second
+    if sim_time_us > 0 and wall_time_s > 0:
+        sim_time_s = sim_time_us / 1_000_000.0
+        wall_time_per_sim_time = wall_time_s / sim_time_s
+        print(
+            f"Performance: {wall_time_per_sim_time:.3f} wall-clock seconds per simulated second."
+        )
+    elif sim_time_us == 0:
+        print("Cannot calculate performance: Total simulated time is zero.")
+    # wall_time_s <= 0 is unlikely if sim_time_us > 0, but handle defensively
+    elif wall_time_s <= 0 and sim_time_us > 0:
+        print("Cannot calculate performance: Wall-clock time is zero or negative.")
 
     if args.plot:
         import matplotlib.pyplot as plt

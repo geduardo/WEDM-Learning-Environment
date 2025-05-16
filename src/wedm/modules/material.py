@@ -11,4 +11,4 @@ class MaterialRemovalModule(EDMModule):
     def update(self, state: EDMState) -> None:
         if state.spark_status[0] == 1 and state.spark_status[2] == 0:
             # constant 0.05 mm per fresh spark
-            state.workpiece_position += 0.05
+            state.workpiece_position += 0.0005

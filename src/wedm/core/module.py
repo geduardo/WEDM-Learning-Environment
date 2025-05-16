@@ -9,8 +9,7 @@ from .state import EDMState
 
 class EDMModule(ABC):
     """
-    Abstract base-class for every physical sub-model.
-    Sub-classes should override :meth:`update`.
+    Abstract base-class for every physical sub-model.    Sub-classes should override :meth:`update`.
     """
 
     # Optional global registry (useful for reflection / auto-import)
