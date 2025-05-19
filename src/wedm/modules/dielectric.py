@@ -8,16 +8,16 @@ from ..core.state import EDMState
 class DielectricModule(EDMModule):
     """Tracks debris concentration & ionised channel lifetime."""
 
-    beta = 1e-3     # debris ↑ per mm³ crater
-    gamma = 5e-4    # base decay rate (µs⁻¹)
-    tau_deion = 6   # µs
+    beta = 1e-3  # debris ↑ per mm³ crater
+    gamma = 5e-4  # base decay rate (µs⁻¹)
+    tau_deion = 6  # µs
 
     def __init__(self, env):
         super().__init__(env)
         self.temp_K = 293.15
         self.debris = 0.0
         self.flow_rate = 1.0
-        self.ion_channel = None         # (y, remaining µs)
+        self.ion_channel = None  # (y, remaining µs)
 
     # ------------------------------------------------------------------ #
     def update(self, state: EDMState) -> None:
