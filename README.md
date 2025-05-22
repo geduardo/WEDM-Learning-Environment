@@ -30,7 +30,7 @@ Requirements:
     python -m venv myvenv
     source myvenv/bin/activate
     ```
-
+    
 3. Install the package using `pip`:
 
     ```bash
