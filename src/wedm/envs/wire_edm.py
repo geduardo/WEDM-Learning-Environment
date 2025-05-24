@@ -18,29 +18,16 @@ class WireEDMEnv(gym.Env):
 
     metadata = {"render_modes": ["human"], "render_fps": 300}
 
-    def __init__(
-        self,
-        *,
-        render_mode: str | None = None,
-        mechanics_control_mode: str = "position",
-    ):
+    def __init__(self, *, render_mode: str | None = None):
         super().__init__()
         self.render_mode = render_mode
-
-        # Validate mechanics control mode
-        if mechanics_control_mode not in ["position", "velocity"]:
-            raise ValueError(
-                f"mechanics_control_mode must be 'position' or 'velocity', got {mechanics_control_mode}"
-            )
-
-        self.mechanics_control_mode = mechanics_control_mode
 
         # ── sim parameters ───────────────────────────────────────────
         self.dt = 1  # µs
         self.servo_interval = 1_000
 
         # workpiece / wire constants
-        self.workpiece_height = 10.0  # mm
+        self.workpiece_height = 50.0  # mm
         self.wire_diameter = 0.25  # mm
 
         # RNG
@@ -54,12 +41,9 @@ class WireEDMEnv(gym.Env):
         self.material = MaterialRemovalModule(self)
         self.dielectric = DielectricModule(self)
         self.wire = WireModule(self)
-        self.mechanics = MechanicsModule(self, control_mode=mechanics_control_mode)
+        self.mechanics = MechanicsModule(self)
 
         # ── action space ─────────────────────────────────────────────
-        # Note: target_delta interpretation depends on control mode:
-        # - position: relative position increment [µm]
-        # - velocity: target velocity [µm/s]
         self.action_space = spaces.Dict(
             {
                 "servo": spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32),
