@@ -49,19 +49,36 @@ def create_gap_controller(desired_gap: float = 17.0):  # µm
     return controller
 
 
-def setup_logger(control_mode: str, log_to_file: bool = True) -> LoggerConfig:
-    """Setup logger configuration."""
-    signals_to_log = [
+def setup_logger(
+    control_mode: str, log_to_file: bool = True, log_strategy: str = "full_field"
+) -> LoggerConfig:
+    """
+    Setup logger configuration with flexible temperature logging strategy.
+
+    Args:
+        control_mode: "position" or "velocity"
+        log_to_file: Whether to log to file
+        log_strategy: "full_field", "zone_mean", or "both"
+    """
+    base_signals = [
         "time",
         "voltage",
         "current",
         "wire_position",
         "wire_velocity",
         "workpiece_position",
-        "wire_average_temperature",
-        "wire_temperature",
         "target_delta",
     ]
+
+    # Add temperature signals based on strategy
+    if log_strategy == "full_field":
+        signals_to_log = base_signals + ["wire_temperature"]
+    elif log_strategy == "zone_mean":
+        signals_to_log = base_signals + ["wire_average_temperature"]
+    elif log_strategy == "both":
+        signals_to_log = base_signals + ["wire_temperature", "wire_average_temperature"]
+    else:
+        raise ValueError(f"Unknown log_strategy: {log_strategy}")
 
     if log_to_file:
         return {
@@ -81,11 +98,30 @@ def setup_logger(control_mode: str, log_to_file: bool = True) -> LoggerConfig:
         }
 
 
-def initialize_environment(control_mode: str, seed: int = 0) -> WireEDMEnv:
-    """Initialize and setup the EDM environment."""
+def initialize_environment(
+    control_mode: str, seed: int = 0, log_strategy: str = "full_field"
+) -> WireEDMEnv:
+    """
+    Initialize and setup the EDM environment with appropriate wire configuration.
+
+    Args:
+        control_mode: "position" or "velocity"
+        seed: Random seed
+        log_strategy: "full_field", "zone_mean", or "both"
+    """
     # Now using the standard environment with built-in optimizations
     env = WireEDMEnv(mechanics_control_mode=control_mode)
     env.reset(seed=seed)
+
+    # Configure wire module based on logging strategy
+    if log_strategy in ["zone_mean", "both"]:
+        # Replace wire module with zone mean calculation enabled
+        from src.wedm.modules.wire import WireModule
+
+        env.wire = WireModule(env, compute_zone_mean=True)
+        print(f"📊 Zone mean calculation: ENABLED (strategy: {log_strategy})")
+    else:
+        print(f"📊 Zone mean calculation: DISABLED (strategy: {log_strategy})")
 
     # Set initial conditions
     env.state.workpiece_position = 100.0  # µm
@@ -350,12 +386,21 @@ def main():
         default="position",
         help="Mechanics control mode (default: position)",
     )
+    parser.add_argument(
+        "--log-strategy",
+        type=str,
+        choices=["full_field", "zone_mean", "both"],
+        default="full_field",
+        help="Temperature logging strategy (default: full_field)",
+    )
 
     args = parser.parse_args()
 
     # Setup
-    logger_config = setup_logger(args.mode, log_to_file=True)
-    env = initialize_environment(args.mode, seed=0)
+    logger_config = setup_logger(
+        args.mode, log_to_file=True, log_strategy=args.log_strategy
+    )
+    env = initialize_environment(args.mode, seed=0, log_strategy=args.log_strategy)
 
     # Run simulation
     log_data, wall_time, sim_time_us = run_simulation(

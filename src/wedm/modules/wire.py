@@ -17,6 +17,7 @@ class WireModule(EDMModule):
         buffer_len_top: float = 20.0,
         spool_T: float = 293.15,
         segment_len: float = 0.2,
+        compute_zone_mean: bool = False,  # Enable zone mean calculation if needed
     ):
         super().__init__(env)
 
@@ -24,6 +25,7 @@ class WireModule(EDMModule):
         self.buffer_top = buffer_len_top
         self.spool_T = spool_T
         self.seg_L = segment_len
+        self.compute_zone_mean = compute_zone_mean  # Store the setting
 
         self.total_L = self.buffer_bottom + env.workpiece_height + self.buffer_top
         self.n_segments = max(1, int(self.total_L / self.seg_L))
@@ -195,8 +197,11 @@ class WireModule(EDMModule):
         if self.n_segments >= 1:
             T[0] = self.spool_T
 
-        # Note: wire_average_temperature can be computed post-processing from
-        # the full temperature field if needed, rather than every microsecond
+        # Compute zone mean if requested (for logging/monitoring)
+        if self.compute_zone_mean:
+            state.wire_average_temperature = self.compute_zone_mean_temperature(T)
+        # Note: When compute_zone_mean=False, wire_average_temperature can be computed
+        # post-processing from the full temperature field if needed
 
     def compute_zone_mean_temperature(self, temperature_field: np.ndarray) -> float:
         """
