@@ -38,7 +38,7 @@ class MechanicsModule(EDMModule):
         self.prev_accel = 0.0
 
         # Method dispatch: set up control law computation during init
-        if self.control_mode  == "position":
+        if self.control_mode == "position":
             self._compute_nominal_accel = self._compute_position_accel
         else:  # velocity
             self._compute_nominal_accel = self._compute_velocity_accel
