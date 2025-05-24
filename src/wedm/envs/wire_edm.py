@@ -40,7 +40,7 @@ class WireEDMEnv(gym.Env):
         self.servo_interval = 1_000
 
         # workpiece / wire constants
-        self.workpiece_height = 50.0  # mm
+        self.workpiece_height = 10.0  # mm
         self.wire_diameter = 0.25  # mm
 
         # RNG
