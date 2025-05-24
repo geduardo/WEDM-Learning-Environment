@@ -28,7 +28,7 @@ class MechanicsModule(EDMModule):
         self.max_speed = 3.0e4  # [µm s⁻¹]
 
         # Pre-compute control law constants
-        if control_mode == "position":
+        if self.control_mode == "position":
             self.damping_coeff = -2.0 * self.zeta * self.omega_n  # -220.0
             self.stiffness_coeff = -(self.omega_n**2)  # -40000.0
 
@@ -38,7 +38,7 @@ class MechanicsModule(EDMModule):
         self.prev_accel = 0.0
 
         # Method dispatch: set up control law computation during init
-        if control_mode == "position":
+        if self.control_mode  == "position":
             self._compute_nominal_accel = self._compute_position_accel
         else:  # velocity
             self._compute_nominal_accel = self._compute_velocity_accel
