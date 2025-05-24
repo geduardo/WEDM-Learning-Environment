@@ -140,3 +140,6 @@ __pycache__/
 # coursor rules
 *.mdc 
 
+# Ignore anything from the folder logs
+logs/
+
