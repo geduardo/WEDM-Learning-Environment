@@ -83,6 +83,7 @@ def setup_logger(control_mode: str, log_to_file: bool = True) -> LoggerConfig:
 
 def initialize_environment(control_mode: str, seed: int = 0) -> WireEDMEnv:
     """Initialize and setup the EDM environment."""
+    # Now using the standard environment with built-in optimizations
     env = WireEDMEnv(mechanics_control_mode=control_mode)
     env.reset(seed=seed)
 
@@ -92,7 +93,6 @@ def initialize_environment(control_mode: str, seed: int = 0) -> WireEDMEnv:
     env.state.target_position = 5_000.0  # µm
     env.state.spark_status = [0, None, 0]
     env.state.dielectric_temperature = 293.15  # Room temperature in K
-    env.state.wire_average_temperature = env.state.dielectric_temperature
 
     # Initialize wire temperature array
     if len(env.state.wire_temperature) == 0:
@@ -151,13 +151,16 @@ def print_step_info(env: WireEDMEnv, step: int) -> None:
     gap = env.state.workpiece_position - env.state.wire_position
     target_unit = "µm" if env.mechanics.control_mode == "position" else "µm/s"
 
+    # Compute wire average temperature only when needed for printing
+    avg_wire_temp = env.wire.compute_zone_mean_temperature(env.state.wire_temperature)
+
     print(
         f"[{env.state.time/1000:.1f} ms] "
         f"gap={gap:6.1f} µm   "
         f"target_delta={env.state.target_delta:6.1f} {target_unit}   "
         f"wire_vel={env.state.wire_velocity:6.1f} µm/s   "
         f"V={env.state.voltage or 0.0:6.1f}  I={env.state.current or 0.0:6.1f}  "
-        f"AvgWireT={env.state.wire_average_temperature or 0.0:6.1f} K"
+        f"AvgWireT={avg_wire_temp:6.1f} K"
     )
 
 
@@ -306,6 +309,15 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
         temp_celsius = np.array(data["wire_average_temperature"]) - 273.15
         axes[4].plot(
             t_ms, temp_celsius, label="Avg Wire Temp (Work Zone)", color="purple"
+        )
+    elif "wire_temperature" in data:
+        # Compute average temperature from full field if needed
+        print("📊 Computing zone mean temperature from full temperature field...")
+        # This would require accessing the wire module to get zone boundaries
+        # For now, just skip or compute simple mean
+        temp_celsius = np.array([np.mean(T) for T in data["wire_temperature"]]) - 273.15
+        axes[4].plot(
+            t_ms, temp_celsius, label="Avg Wire Temp (computed)", color="purple"
         )
     axes[4].set_ylabel("Temperature [°C]")
     axes[4].set_xlabel("Time [ms]")
