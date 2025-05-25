@@ -21,7 +21,7 @@ from src.wedm.envs import WireEDMEnv
 from src.wedm.utils.logger import SimulationLogger, LoggerConfig
 
 
-def create_gap_controller(desired_gap: float = 17.0):  # µm
+def create_gap_controller(desired_gap: float = 5.0):  # µm
     """Create adaptive gap controller that works with both control modes."""
 
     def controller(env: WireEDMEnv) -> Dict[str, Any]:
@@ -40,9 +40,14 @@ def create_gap_controller(desired_gap: float = 17.0):  # µm
             "servo": np.array([delta], dtype=np.float32),
             "generator_control": {
                 "target_voltage": np.array([80.0], dtype=np.float32),
-                "peak_current": np.array([300.0], dtype=np.float32),
+                # Current mode selection (1-19 maps directly to I1-I19):
+                # Mode 13 = I13 = 215A machine current → mapped to 5A crater data
+                # Other options: 5=I5(60A→1A), 9=I9(110A→3A), 17=I17(425A→11A), 19=I19(600A→17A)
+                "current_mode": np.array(
+                    [7], dtype=np.int32
+                ),  # I13 mode - good balance for general machining
                 "ON_time": np.array([2.0], dtype=np.float32),
-                "OFF_time": np.array([5.0], dtype=np.float32),
+                "OFF_time": np.array([33.0], dtype=np.float32),
             },
         }
 
@@ -295,14 +300,54 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
         # If positioning fails, just continue without it
         pass
 
-    # 1. Electrical signals
-    if "voltage" in data:
-        axes[0].plot(t_ms, data["voltage"], label="Voltage [V]", color="blue")
+    # 1. Electrical signals with 1ms moving average for voltage
+    ax_voltage = axes[0]  # Left y-axis for voltage
+    ax_current = ax_voltage.twinx()  # Right y-axis for current
+
     if "current" in data:
-        axes[0].plot(t_ms, data["current"], label="Current [A]", color="red")
-    axes[0].set_ylabel("Electrical")
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+        ax_current.plot(
+            t_ms, data["current"], label="Current [A]", color="red", alpha=0.4
+        )
+    if "voltage" in data:
+        voltage = np.array(data["voltage"])
+        # Plot raw voltage first (so it appears behind)
+        ax_voltage.plot(t_ms, voltage, label="Voltage [V]", color="blue", alpha=0.8)
+
+        # Calculate 1ms moving average for voltage
+        # Find window size for 1ms (assuming roughly uniform time steps)
+        if len(t_ms) > 1:
+            dt_avg = np.mean(np.diff(t_ms))  # Average time step in ms
+            window_size = max(1, int(1.0 / dt_avg))  # Points in 1ms window
+
+            # Apply moving average using convolution
+            if window_size > 1 and len(voltage) >= window_size:
+                voltage_avg = np.convolve(
+                    voltage, np.ones(window_size) / window_size, mode="same"
+                )
+                # Plot 1ms average AFTER raw voltage (so it appears on top/in front)
+                ax_voltage.plot(
+                    t_ms,
+                    voltage_avg,
+                    label="Voltage 1ms avg [V]",
+                    color="darkblue",
+                    linewidth=3,
+                    zorder=10,  # Higher zorder ensures it's drawn on top
+                )
+
+    # Set labels and colors for dual axes
+    ax_voltage.set_ylabel("Voltage [V]", color="blue")
+    ax_voltage.tick_params(axis="y", labelcolor="blue")
+    ax_current.set_ylabel("Current [A]", color="red")
+    ax_current.tick_params(axis="y", labelcolor="red")
+
+    # Combine legends from both axes
+    lines_voltage, labels_voltage = ax_voltage.get_legend_handles_labels()
+    lines_current, labels_current = ax_current.get_legend_handles_labels()
+    ax_voltage.legend(
+        lines_voltage + lines_current, labels_voltage + labels_current, loc="upper left"
+    )
+
+    ax_voltage.grid(True, alpha=0.3)
 
     # 2. Positions
     if "wire_position" in data:
@@ -359,6 +404,28 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
     axes[4].set_xlabel("Time [ms]")
     axes[4].legend()
     axes[4].grid(True, alpha=0.3)
+
+    # Calculate and display spark count in last 100ms
+    if "current" in data and len(data["current"]) > 0:
+        current = np.array(data["current"])
+        # Find indices for last 100ms
+        last_100ms_mask = t_ms >= (t_ms[-1] - 100.0)
+        current_last_100ms = current[last_100ms_mask]
+
+        # Count sparks by detecting threshold crossings (transitions from below to above)
+        spark_threshold = 0.1  # A
+        above_threshold = current_last_100ms > spark_threshold
+        # Count rising edges: where current goes from <= threshold to > threshold
+        spark_count = np.sum(np.diff(above_threshold.astype(int)) > 0)
+
+        # Add text annotation to the plot
+        fig.text(
+            0.02,
+            0.02,
+            f"Sparks in last 100ms: {spark_count}",
+            fontsize=12,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue"),
+        )
 
     plt.suptitle(
         f"Wire-EDM Smoke Test ({control_mode.capitalize()} Control)",

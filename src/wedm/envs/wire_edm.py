@@ -41,7 +41,7 @@ class WireEDMEnv(gym.Env):
 
         # workpiece / wire constants
         self.workpiece_height = 10.0  # mm
-        self.wire_diameter = 0.25  # mm
+        self.wire_diameter = 0.2  # mm
 
         # RNG
         self.np_random = np.random.default_rng()
@@ -66,7 +66,9 @@ class WireEDMEnv(gym.Env):
                 "generator_control": spaces.Dict(
                     {
                         "target_voltage": spaces.Box(0.0, 200.0, (1,), np.float32),
-                        "peak_current": spaces.Box(0.0, 100.0, (1,), np.float32),
+                        "current_mode": spaces.Box(
+                            1, 19, (1,), dtype=np.int32
+                        ),  # I1 to I19 (1-19 maps directly to I1-I19)
                         "ON_time": spaces.Box(0.0, 5.0, (1,), np.float32),
                         "OFF_time": spaces.Box(0.0, 100.0, (1,), np.float32),
                     }
@@ -135,7 +137,9 @@ class WireEDMEnv(gym.Env):
         self.state.target_delta = float(action["servo"][0])
         gc = action["generator_control"]
         self.state.target_voltage = float(gc["target_voltage"][0])
-        self.state.peak_current = float(gc["peak_current"][0])
+        # Convert integer mode (1-19) to I-mode string ("I1"-"I19")
+        mode_int = int(gc["current_mode"][0])
+        self.state.current_mode = f"I{mode_int}"
         self.state.ON_time = float(gc["ON_time"][0])
         self.state.OFF_time = float(gc["OFF_time"][0])
 

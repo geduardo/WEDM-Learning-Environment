@@ -64,7 +64,7 @@ class WireModule(EDMModule):
         self.denominator = self.rho * self.cp * self.S * self.delta_y
         self.dt_sim = 1e-6
         self.temp_ref = 293.15
-        self.joule_geom_factor = 0.5 * self.delta_y / self.S if self.S != 0 else 0.0
+        self.joule_geom_factor = self.delta_y / self.S if self.S != 0 else 0.0
 
         # Pre-compute combined scaling factor
         self.temp_update_factor = self.dt_sim / self.denominator

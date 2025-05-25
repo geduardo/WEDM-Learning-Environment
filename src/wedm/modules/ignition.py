@@ -1,7 +1,9 @@
 # src/edm_env/modules/ignition.py
 from __future__ import annotations
 
+import json
 import numpy as np
+from pathlib import Path
 
 from ..core.module import EDMModule
 from ..core.state import EDMState
@@ -14,13 +16,49 @@ class IgnitionModule(EDMModule):
     def __init__(self, env):
         super().__init__(env)
         self.lambda_cache: dict[float, float] = {}
+        # Load machine current modes data
+        self.currents_data = self._load_currents_data()
+
+        # Cache for efficiency
+        self._cached_current_mode: str | None = None
+        self._cached_current_value: float = 60.0  # Default to I5 current
+
+    def _load_currents_data(self) -> dict:
+        """Load current mode mappings from currents.json."""
+        # Get the path relative to this module
+        current_dir = Path(__file__).parent
+        json_path = current_dir / "currents.json"
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+            return data
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Could not find currents data file at {json_path}")
+
+    def _get_current_from_mode(self, current_mode: str | None) -> float:
+        """Get actual current value from current mode with caching."""
+        # Only recalculate if current_mode has changed
+        if current_mode != self._cached_current_mode:
+            if current_mode is None:
+                current_mode = "I5"
+
+            # Get actual current from current mode (0-18 maps to I1-I19)
+            if current_mode not in self.currents_data:
+                # Fallback to I5 if invalid mode (middle range)
+                current_mode = "I5"
+
+            self._cached_current_value = self.currents_data[current_mode]["Current"]
+            self._cached_current_mode = current_mode
+
+        return self._cached_current_value
 
     # ------------------------------------------------------------------ #
     # Public
     # ------------------------------------------------------------------ #
     def update(self, state: EDMState) -> None:
         target_voltage = state.target_voltage or 80.0  # Default values if None
-        peak_current = state.peak_current or 300.0  # Default values if None
+        peak_current = self._get_current_from_mode(state.current_mode)
 
         ON_time = state.ON_time or 3  # Default values if None
         OFF_time = state.OFF_time or 80  # Default values if None
