@@ -60,7 +60,7 @@ def plot_heatmap_and_average(npz_filepath: str, use_work_zone_mean: bool = True)
     if use_work_zone_mean:
         # Calculate work zone boundaries (same logic as WireModule)
         # Standard Wire-EDM configuration
-        buffer_bottom = 10.0  # mm (update this to match your configuration)
+        buffer_bottom = 30.0  # mm (update this to match your configuration)
         segment_len = 0.2  # mm (update this to match your configuration)
         workpiece_height = 10.0  # mm (update this to match your configuration)
 
@@ -111,8 +111,11 @@ def plot_heatmap_and_average(npz_filepath: str, use_work_zone_mean: bool = True)
     # Plot 1: Heatmap (on ax_heatmap)
     # Transpose wire_temp_field so segments are on y-axis and time on x-axis for imshow
     # imshow plots (M, N) data with M rows (y-axis) and N columns (x-axis)
+    # Convert to Celsius for display
+    wire_temp_celsius = wire_temp_field - 273.15
+
     im = ax_heatmap.imshow(
-        wire_temp_field.T,
+        wire_temp_celsius.T,
         aspect="auto",
         origin="lower",  # Place segment 0 at the bottom
         extent=[
@@ -122,36 +125,37 @@ def plot_heatmap_and_average(npz_filepath: str, use_work_zone_mean: bool = True)
             segment_indices[-1] + 0.5,
         ],  # Match axes
         interpolation="nearest",  # Good for discrete data
-        vmin=20 + 273.15,  # Set minimum temperature to 20 C in Kelvin
-        vmax=300 + 273.15,  # Set maximum temperature to 300 C in Kelvin
+        vmin=20,  # Set minimum temperature to 20 C (black)
+        vmax=300,  # Set maximum temperature to 300 C (yellow/white)
+        cmap="hot",  # Black -> red -> yellow/white colormap
     )
     ax_heatmap.set_xlim(time_ms[0], time_ms[-1])  # Ensure time axis is aligned
 
-    cbar = fig.colorbar(im, ax=ax_heatmap, label="Temperature (K)")
+    cbar = fig.colorbar(im, ax=ax_heatmap, label="Temperature (°C)")
     ax_heatmap.set_ylabel("Wire Segment Index")
 
-    # Add zone boundaries to heatmap if using work zone mean
-    if (
-        use_work_zone_mean
-        and "actual_zone_start" in locals()
-        and "actual_zone_end" in locals()
-    ):
-        ax_heatmap.axhline(
-            y=actual_zone_start - 0.5,
-            color="red",
-            linestyle="--",
-            alpha=0.7,
-            label="Work Zone",
-        )
-        ax_heatmap.axhline(
-            y=actual_zone_end - 0.5, color="red", linestyle="--", alpha=0.7
-        )
-        ax_heatmap.legend()
-        ax_heatmap.set_title(
-            "Wire Temperature Distribution Over Time (Work Zone Highlighted)"
-        )
-    else:
-        ax_heatmap.set_title("Wire Temperature Distribution Over Time")
+    # # Add zone boundaries to heatmap if using work zone mean
+    # if (
+    #     use_work_zone_mean
+    #     and "actual_zone_start" in locals()
+    #     and "actual_zone_end" in locals()
+    # ):
+    #     ax_heatmap.axhline(
+    #         y=actual_zone_start - 0.5,
+    #         color="red",
+    #         linestyle="--",
+    #         alpha=0.7,
+    #         label="Work Zone",
+    #     )
+    #     ax_heatmap.axhline(
+    #         y=actual_zone_end - 0.5, color="red", linestyle="--", alpha=0.7
+    #     )
+    #     ax_heatmap.legend()
+    #     ax_heatmap.set_title(
+    #         "Wire Temperature Distribution Over Time (Work Zone Highlighted)"
+    #     )
+    # else:
+    #     ax_heatmap.set_title("Wire Temperature Distribution Over Time")
 
     # Plot 2: Average Temperature (on ax_avg_temp)
     ax_avg_temp.plot(time_ms, avg_temp_over_time, color="r", linestyle="-")

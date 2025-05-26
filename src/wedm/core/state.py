@@ -38,7 +38,7 @@ class EDMState:
 
     # Generator control state variables
     target_voltage: Optional[float] = None
-    peak_current: Optional[float] = None
+    current_mode: Optional[str] = None  # Current mode like "I1", "I2", ..., "I19"
     OFF_time: Optional[float] = None
     ON_time: Optional[float] = None
 
