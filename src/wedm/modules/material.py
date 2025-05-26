@@ -22,9 +22,10 @@ class MaterialRemovalModule(EDMModule):
 
         # Cache for efficiency - avoid repeated current mode lookups
         self._cached_current_mode: str | None = None
-        self._cached_machine_current: float = 60.0  # Default to I5
-        self._cached_mapped_current: int = 1  # Default mapping
-        self._cached_crater_info: dict = self.crater_data["1"]  # Default crater data
+        self._cached_crater_info: dict = self.crater_data["I1"]  # Default crater data
+
+        # Track crater volumes for analysis
+        self.crater_volumes_um3 = []  # Store all crater volumes in μm³
 
     def _load_crater_data(self) -> dict:
         """Load crater volume distributions from area_corrected.json."""
@@ -72,25 +73,16 @@ class MaterialRemovalModule(EDMModule):
             if current_mode is None:
                 current_mode = "I1"  # Default to I1 if not specified
 
-            # Get actual current from current mode (0-18 maps to I1-I19)
-            current_mode_key = current_mode
-            if current_mode_key not in self.currents_data:
-                # Fallback to I1 if invalid mode
-                current_mode_key = "I1"
+            # Check if current mode has crater data available
+            if current_mode not in self.crater_data:
+                available_modes = list(self.crater_data.keys())
+                raise ValueError(
+                    f"Current mode {current_mode} is not available in crater data. "
+                    f"Available modes: {available_modes}"
+                )
 
-            self._cached_machine_current = self.currents_data[current_mode_key][
-                "Current"
-            ]  # In Amperes
-
-            # Map machine current to available crater data current
-            self._cached_mapped_current = self._map_machine_current_to_crater_data(
-                self._cached_machine_current
-            )
-
-            # Get distribution parameters
-            self._cached_crater_info = self.crater_data[
-                str(self._cached_mapped_current)
-            ]
+            # Get distribution parameters directly from current mode
+            self._cached_crater_info = self.crater_data[current_mode]
             self._cached_current_mode = current_mode
 
         # Use cached crater info
@@ -106,34 +98,13 @@ class MaterialRemovalModule(EDMModule):
         # Ensure non-negative volume
         sampled_volume_um3 = max(0, sampled_volume_um3)
 
+        # Store the crater volume for analysis
+        self.crater_volumes_um3.append(sampled_volume_um3)
+
         # Convert to mm³
         sampled_volume_mm3 = sampled_volume_um3 / 1e9
 
         return sampled_volume_mm3
-
-    def _map_machine_current_to_crater_data(self, machine_current: float) -> int:
-        """Map machine current (30-600A) to available crater data current (1-17A).
-
-        Uses a scaling approach where machine currents are mapped to crater data currents
-        based on relative position in their respective ranges.
-        """
-        # Machine current range: 30A (I1) to 600A (I19)
-        machine_min, machine_max = 30, 600
-
-        # Available crater data range: 1A to 17A
-        crater_currents = [1, 3, 5, 7, 9, 11, 13, 15, 17]
-
-        # Clamp machine current to valid range
-        machine_current = max(machine_min, min(machine_max, machine_current))
-
-        # Calculate relative position (0-1) in machine current range
-        relative_pos = (machine_current - machine_min) / (machine_max - machine_min)
-
-        # Map to crater data current index
-        crater_index = int(relative_pos * (len(crater_currents) - 1))
-        crater_index = max(0, min(len(crater_currents) - 1, crater_index))
-
-        return crater_currents[crater_index]
 
     def _calculate_position_increment(
         self, crater_volume: float, state: EDMState
@@ -177,13 +148,21 @@ class MaterialRemovalModule(EDMModule):
             current_mode_key = "I1"
 
         machine_current = self.currents_data[current_mode_key]["Current"]
-        mapped_current = self._map_machine_current_to_crater_data(machine_current)
+
+        # Check if crater data is available for this current mode
+        if current_mode_key not in self.crater_data:
+            available_modes = list(self.crater_data.keys())
+            return {
+                "current_mode": current_mode_key,
+                "machine_current": machine_current,
+                "crater_data": None,
+                "error": f"No crater data available for {current_mode_key}. Available: {available_modes}",
+            }
 
         return {
             "current_mode": current_mode_key,
             "machine_current": machine_current,
-            "mapped_crater_current": mapped_current,
-            "crater_data": self.crater_data[str(mapped_current)],
+            "crater_data": self.crater_data[current_mode_key],
         }
 
     def get_current_mapping_table(self) -> dict:
@@ -192,3 +171,29 @@ class MaterialRemovalModule(EDMModule):
         for i in range(19):  # I1 to I19 (0-18)
             mapping[f"I{i+1}"] = self.get_crater_data_for_current_mode(f"I{i+1}")
         return mapping
+
+    def get_crater_statistics(self) -> dict:
+        """Get statistics about generated craters."""
+        if not self.crater_volumes_um3:
+            return {
+                "total_craters": 0,
+                "mean_volume_um3": 0,
+                "std_volume_um3": 0,
+                "min_volume_um3": 0,
+                "max_volume_um3": 0,
+                "volumes_um3": [],
+            }
+
+        volumes = np.array(self.crater_volumes_um3)
+        return {
+            "total_craters": len(volumes),
+            "mean_volume_um3": np.mean(volumes),
+            "std_volume_um3": np.std(volumes),
+            "min_volume_um3": np.min(volumes),
+            "max_volume_um3": np.max(volumes),
+            "volumes_um3": volumes,
+        }
+
+    def reset_crater_tracking(self):
+        """Reset crater volume tracking (useful for new simulations)."""
+        self.crater_volumes_um3 = []

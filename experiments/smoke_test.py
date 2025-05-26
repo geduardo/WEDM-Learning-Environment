@@ -21,7 +21,7 @@ from src.wedm.envs import WireEDMEnv
 from src.wedm.utils.logger import SimulationLogger, LoggerConfig
 
 
-def create_gap_controller(desired_gap: float = 5.0):  # µm
+def create_gap_controller(desired_gap: float = 15.0):  # µm
     """Create adaptive gap controller that works with both control modes."""
 
     def controller(env: WireEDMEnv) -> Dict[str, Any]:
@@ -44,7 +44,7 @@ def create_gap_controller(desired_gap: float = 5.0):  # µm
                 # Mode 13 = I13 = 215A machine current → mapped to 5A crater data
                 # Other options: 5=I5(60A→1A), 9=I9(110A→3A), 17=I17(425A→11A), 19=I19(600A→17A)
                 "current_mode": np.array(
-                    [7], dtype=np.int32
+                    [9], dtype=np.int32
                 ),  # I13 mode - good balance for general machining
                 "ON_time": np.array([2.0], dtype=np.float32),
                 "OFF_time": np.array([33.0], dtype=np.float32),
@@ -436,6 +436,89 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
     plt.show()
 
 
+def plot_crater_histogram(env: WireEDMEnv) -> None:
+    """Create histogram of crater volumes generated during simulation."""
+    import matplotlib.pyplot as plt
+
+    # Get crater statistics from the material removal module
+    crater_stats = env.material.get_crater_statistics()
+
+    if crater_stats["total_craters"] == 0:
+        print("No craters were generated during the simulation.")
+        return
+
+    volumes_um3 = crater_stats["volumes_um3"]
+
+    # Create histogram
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+
+    # Position the plot window
+    try:
+        mngr = fig.canvas.manager
+        if hasattr(mngr, "window"):
+            if hasattr(mngr.window, "wm_geometry"):
+                mngr.window.wm_geometry("+150+100")
+            elif hasattr(mngr.window, "setGeometry"):
+                mngr.window.setGeometry(150, 100, 1400, 600)
+    except:
+        pass
+
+    # Histogram 1: Linear scale
+    n_bins = min(50, max(10, len(volumes_um3) // 10))  # Adaptive bin count
+    ax1.hist(volumes_um3, bins=n_bins, alpha=0.7, color="skyblue", edgecolor="black")
+    ax1.set_xlabel("Crater Volume [μm³]")
+    ax1.set_ylabel("Frequency")
+    ax1.set_title("Crater Volume Distribution (Linear Scale)")
+    ax1.grid(True, alpha=0.3)
+
+    # Add statistics text
+    stats_text = (
+        f"Total craters: {crater_stats['total_craters']:,}\n"
+        f"Mean: {crater_stats['mean_volume_um3']:.1f} μm³\n"
+        f"Std: {crater_stats['std_volume_um3']:.1f} μm³\n"
+        f"Min: {crater_stats['min_volume_um3']:.1f} μm³\n"
+        f"Max: {crater_stats['max_volume_um3']:.1f} μm³"
+    )
+    ax1.text(
+        0.02,
+        0.98,
+        stats_text,
+        transform=ax1.transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"),
+    )
+
+    # Histogram 2: Log scale (if there's enough range)
+    if crater_stats["max_volume_um3"] / crater_stats["min_volume_um3"] > 10:
+        # Use log bins for better visualization of wide distributions
+        log_bins = np.logspace(
+            np.log10(max(1e-3, crater_stats["min_volume_um3"])),
+            np.log10(crater_stats["max_volume_um3"]),
+            n_bins,
+        )
+        ax2.hist(
+            volumes_um3, bins=log_bins, alpha=0.7, color="lightcoral", edgecolor="black"
+        )
+        ax2.set_xscale("log")
+        ax2.set_xlabel("Crater Volume [μm³] (log scale)")
+        ax2.set_ylabel("Frequency")
+        ax2.set_title("Crater Volume Distribution (Log Scale)")
+    else:
+        # If range is small, show cumulative distribution instead
+        sorted_volumes = np.sort(volumes_um3)
+        cumulative = np.arange(1, len(sorted_volumes) + 1) / len(sorted_volumes)
+        ax2.plot(sorted_volumes, cumulative, "r-", linewidth=2)
+        ax2.set_xlabel("Crater Volume [μm³]")
+        ax2.set_ylabel("Cumulative Probability")
+        ax2.set_title("Crater Volume Cumulative Distribution")
+
+    ax2.grid(True, alpha=0.3)
+
+    plt.suptitle("Crater Volume Analysis", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    plt.show()
+
+
 def main():
     """Main entry point with clean CLI handling."""
     parser = argparse.ArgumentParser(description="Wire-EDM smoke test")
@@ -479,6 +562,8 @@ def main():
         data = load_simulation_data(log_data, logger_config)
         if data is not None:
             plot_simulation_results(data, args.mode)
+            # Show crater histogram after main plot is closed
+            plot_crater_histogram(env)
 
 
 if __name__ == "__main__":

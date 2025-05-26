@@ -13,7 +13,7 @@ class WireModule(EDMModule):
     def __init__(
         self,
         env,
-        buffer_len_bottom: float = 10.0,
+        buffer_len_bottom: float = 30.0,
         buffer_len_top: float = 30.0,
         spool_T: float = 293.15,
         segment_len: float = 0.2,
