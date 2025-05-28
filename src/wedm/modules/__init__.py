@@ -1,4 +1,4 @@
-from .dielectric import DielectricModule
+from .old_dielectric import DielectricModule
 from .ignition import IgnitionModule
 from .material import MaterialRemovalModule
 from .mechanics import MechanicsModule

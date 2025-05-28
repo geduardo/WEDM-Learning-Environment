@@ -57,112 +57,134 @@ class IgnitionModule(EDMModule):
     # Public
     # ------------------------------------------------------------------ #
     def update(self, state: EDMState) -> None:
-        target_voltage = state.target_voltage or 80.0  # Default values if None
-        peak_current = self._get_current_from_mode(state.current_mode)
+        """Update ignition state with clear, simple logic."""
 
-        ON_time = state.ON_time or 3  # Default values if None
-        OFF_time = state.OFF_time or 80  # Default values if None
+        # Step 1: Update short circuit detection
+        self._update_short_circuit_detection(state)
 
-        short_circuit_active = is_short_circuited(state)
-        spark_state, spark_loc, spark_dur = state.spark_status
+        # Step 2: Force voltage to 0 if short circuit
+        if state.is_short_circuit:
+            state.voltage = 0
 
-        # State 1: Ongoing spark (or "ON" period during short circuit)
-        if spark_state == 1:
-            current_spark_duration = spark_dur + 1
-            # Update duration first, spark_loc remains the same for an ongoing spark
-            state.spark_status = [1, spark_loc, current_spark_duration]
+        # Step 3: Handle state machine
+        spark_state = state.spark_status[0]
 
-            if current_spark_duration >= ON_time:
-                state.spark_status[0] = -2  # Transition to rest/OFF state
-                # spark_dur (current_spark_duration) carries over to state -2
-                state.current = 0
-                state.voltage = 0
-            else:  # Still in ON period
-                state.current = peak_current
-                if short_circuit_active:
-                    state.voltage = 0
-                else:
-                    state.voltage = target_voltage * 0.3  # Normal sparking voltage
-            return
-
-        # State -2: Rest period (or "OFF" period during short circuit)
-        if spark_state == -2:
-            # spark_dur here is total duration since ON phase started
-            current_total_duration = spark_dur + 1
-            # spark_loc is None during rest period
-            state.spark_status = [-2, None, current_total_duration]  # Update duration
-
-            if current_total_duration >= (ON_time + OFF_time):
-                state.spark_status = [0, None, 0]  # Transition to Idle
-                state.current = 0
-                # Voltage for idle state depends on short circuit
-                if short_circuit_active:
-                    state.voltage = 0
-                else:
-                    state.voltage = target_voltage
-            else:  # Still in OFF period
-                state.current = 0
-                state.voltage = 0  # Voltage is 0 during rest
-            return
-
-        # State 0: Idle (waiting to ignite or transition to "ON" if shorted)
         if spark_state == 0:
-            state.current = 0  # No current when idle (unless it transitions)
+            self._handle_idle_state(state)
+        elif spark_state == 1:
+            self._handle_spark_state(state)
+        elif spark_state == -1:
+            self._handle_short_state(state)
+        elif spark_state == -2:
+            self._handle_rest_state(state)
 
-            if short_circuit_active:
-                # If idle and becomes shorted, behave as if "ignited" into a shorted ON state
-                state.spark_status = [
-                    1,
-                    None,
-                    0,
-                ]  # Transition to ON state, duration 0, no specific spark_loc
-                state.current = peak_current  # Current flows
-                state.voltage = 0  # Voltage is 0 due to short
-            else:
-                # Not short-circuited, attempt normal ignition
-                state.voltage = (
-                    target_voltage  # Set open voltage before checking ignition
+    def _update_short_circuit_detection(self, state: EDMState) -> None:
+        """Update short circuit flag based on gap."""
+        gap = max(0.0, state.workpiece_position - state.wire_position)
+        state.is_short_circuit = gap < 10.0
+
+    def _handle_idle_state(self, state: EDMState) -> None:
+        """Handle idle state (state 0)."""
+        state.current = 0
+
+        if state.is_short_circuit:
+            # Short circuit during idle → deliver pulse
+            state.spark_status = [-1, None, 0]
+            state.current = self._get_peak_current(state)
+        else:
+            # Normal idle → set voltage and check for ignition
+            state.voltage = self._get_target_voltage(state)
+
+            if self._should_ignite(state):
+                # Start normal spark
+                spark_location = self.env.np_random.uniform(
+                    0, self.env.workpiece_height
                 )
-                # _cond_prob will use the current gap, which is positive here.
-                p_ignite = self._cond_prob(state)
-                if self.env.np_random.random() < p_ignite:
-                    new_spark_loc = self.env.np_random.uniform(
-                        0, self.env.workpiece_height
-                    )
-                    state.spark_status = [1, new_spark_loc, 0]  # Ignite, go to ON state
-                    state.voltage = target_voltage * 0.3  # Spark voltage
-                    state.current = peak_current
-                # else: remains idle.
-                # state.current is already 0.
-                # state.voltage is target_voltage (already set for non-igniting idle).
-            return
+                state.spark_status = [1, spark_location, 0]
+                state.voltage = self._get_target_voltage(state) * 0.3
+                state.current = self._get_peak_current(state)
+
+    def _handle_spark_state(self, state: EDMState) -> None:
+        """Handle active spark state (state 1)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
+
+        if duration >= self._get_on_time(state):
+            # Spark finished → go to rest
+            state.spark_status[0] = -2
+            state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = 0
+        else:
+            # Continue spark
+            state.current = self._get_peak_current(state)
+            if not state.is_short_circuit:
+                state.voltage = self._get_target_voltage(state) * 0.3
+
+    def _handle_short_state(self, state: EDMState) -> None:
+        """Handle short circuit pulse state (state -1)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
+
+        if duration >= self._get_on_time(state):
+            # Short pulse finished → go to rest
+            state.spark_status[0] = -2
+            state.current = 0
+        else:
+            # Continue short pulse
+            state.current = self._get_peak_current(state)
+
+    def _handle_rest_state(self, state: EDMState) -> None:
+        """Handle rest/off state (state -2)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
+
+        total_cycle_time = self._get_on_time(state) + self._get_off_time(state)
+
+        if duration >= total_cycle_time:
+            # Rest finished → back to idle
+            state.spark_status = [0, None, 0]
+            state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = self._get_target_voltage(state)
+        else:
+            # Continue rest
+            state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = 0
+
+    def _should_ignite(self, state: EDMState) -> bool:
+        """Check if normal ignition should occur."""
+        if state.is_short_circuit:
+            return False
+
+        ignition_probability = self.get_lambda(state)
+        return self.env.np_random.random() < ignition_probability
+
+    def _get_target_voltage(self, state: EDMState) -> float:
+        """Get target voltage with default."""
+        return state.target_voltage or 80.0
+
+    def _get_peak_current(self, state: EDMState) -> float:
+        """Get peak current for current mode."""
+        return self._get_current_from_mode(state.current_mode)
+
+    def _get_on_time(self, state: EDMState) -> float:
+        """Get ON time with default."""
+        return state.ON_time or 3
+
+    def _get_off_time(self, state: EDMState) -> float:
+        """Get OFF time with default."""
+        return state.OFF_time or 80
 
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
-    def _cond_prob(self, state: EDMState) -> float:
-        # Ensure we don't try to calculate ignition probability if already shorted,
-        # as get_lambda might not be defined for non-positive gap.
-        # This check is more of a safeguard; primary short-circuit handling is done above.
-        if is_short_circuited(state):
-            return 0.0  # Or handle as an error/impossible state for ignition
-        return self.get_lambda(state)
-
     def get_lambda(self, state: EDMState) -> float:
-        # This check for short-circuit should ideally not be hit if _cond_prob handles it,
-        # but it's a good safeguard for direct calls to get_lambda or if logic changes.
-        if state.wire_position >= state.workpiece_position:
-            # This specific error condition might now be better handled by checking is_short_circuited(state)
-            # at the call site of get_lambda or ensuring _cond_prob prevents this call.
-            # For now, keeping the original logic, but it's a point for future refinement.
-            raise ValueError(
-                "get_lambda called when wire_position >= workpiece_position. "
-                "Gap must be positive for ignition probability calculation. "
-                "This should be handled by is_short_circuited() checks before calling _cond_prob."
-            )
+        """Calculate ignition probability based on gap."""
+        if state.is_short_circuit:
+            raise ValueError("get_lambda called during short circuit condition.")
 
-        # At this point, state.wire_position < state.workpiece_position,
-        # so (state.workpiece_position - state.wire_position) is positive.
         gap = state.workpiece_position - state.wire_position
 
         if gap not in self.lambda_cache:

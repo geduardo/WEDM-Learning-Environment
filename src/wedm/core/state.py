@@ -59,18 +59,28 @@ class EDMState:
     # state: 0 = none | 1 = spark | −1 = short | −2 = rest
     spark_status: List[Optional[float]] = field(default_factory=lambda: [0, None, 0])
 
-    # Dielectric
+    # Dielectric and debris tracking
     dielectric_conductivity: float = (
         0.0  # [S m⁻¹] Conductivity of the dielectric material
     )
     dielectric_temperature: float = 0.0  # [K] Temperature of the dielectric material
     debris_concentration: float = (
-        0.0  # [kg m⁻³] Concentration of debris in the dielectric
+        0.0  # [kg m⁻³] Concentration of debris in the dielectric (legacy)
     )
-    dielectric_flow_rate: float = 0.0  # [m³ s⁻¹] Flow rate of the dielectric
+    dielectric_flow_rate: float = 0.0  # [m³ s⁻¹] Flow rate of the dielectric (legacy)
     ionized_channel: Optional[Tuple[float, int]] = (
         None  # (y-loc, duration) of the ionized channel
     )
+
+    # New debris tracking attributes
+    debris_volume: float = 0.0  # [mm³] Total volume of debris particles
+    debris_density: float = 0.0  # [dimensionless] Debris density ratio (0-1)
+    cavity_volume: float = 0.0  # [mm³] Total cavity volume between wire and workpiece
+    flow_rate: float = 0.0  # [mm³/s] Current dielectric flow rate
+    last_crater_volume: float = 0.0  # [mm³] Volume of last crater for debris tracking
+
+    # Short circuit detection (updated by ignition module)
+    is_short_circuit: bool = False  # Simple short circuit flag (gap < 10μm)
 
     # Servo commands
     target_delta: float = 0.0  # [µm]

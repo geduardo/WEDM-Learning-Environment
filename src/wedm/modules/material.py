@@ -55,14 +55,22 @@ class MaterialRemovalModule(EDMModule):
 
     def update(self, state: EDMState) -> None:
         """Update material removal based on spark events and crater volumes."""
-        # Only remove material during fresh sparks (transition from no spark to spark)
+        # Only remove material during fresh REAL sparks (state 1), not short circuits (state -1)
+        # Skip material removal during short circuits (state -1)
         if state.spark_status[0] == 1 and state.spark_status[2] == 0:
-            # Fresh spark just ignited, calculate material removal
+            # Fresh real spark just ignited, calculate material removal
             crater_volume = self._sample_crater_volume(state)
+
+            # Make crater volume available to dielectric module for debris tracking
+            state.last_crater_volume = crater_volume
+
             if crater_volume > 0:
                 # Calculate workpiece position increment
                 delta_x = self._calculate_position_increment(crater_volume, state)
                 state.workpiece_position += delta_x
+        else:
+            # No fresh real spark, reset crater volume
+            state.last_crater_volume = 0.0
 
     def _sample_crater_volume(self, state: EDMState) -> float:
         """Sample crater volume from empirical distribution based on current mode."""
