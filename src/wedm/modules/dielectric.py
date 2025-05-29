@@ -1,14 +1,25 @@
-# src/edm_env/modules/dielectric.py
+# src/wedm/modules/dielectric_optimized.py
 from __future__ import annotations
 
 import numpy as np
+from numba import njit
 
 from ..core.module import EDMModule
 from ..core.state import EDMState
 
 
+@njit(cache=True, fastmath=True)
+def fast_exp(x):
+    """Fast approximation of exp(-x) for x >= 0."""
+    # Use Padé approximation for small x
+    if x < 0.5:
+        return (1 - 0.5 * x) / (1 + 0.5 * x)
+    # Use standard exp for larger values
+    return np.exp(-x)
+
+
 class DielectricModule(EDMModule):
-    """Advanced debris tracking and short circuit model for Wire EDM."""
+    """Optimized debris tracking and short circuit model for Wire EDM."""
 
     def __init__(
         self,
@@ -31,58 +42,85 @@ class DielectricModule(EDMModule):
         self.k_debris = debris_obstruction_coeff  # [dimensionless]
         self.g_ref = reference_gap  # [μm]
 
+        # Pre-compute constants
+        self.cavity_volume_coeff = np.pi * self.wire_radius * self.workpiece_height
+        self.g_ref_cubed = self.g_ref**3
+        self.debris_removal_per_us = (
+            self.beta * self.f0 * 1e-6
+        )  # Pre-compute for μs timestep
+
         # Internal state
         self.debris_volume = 0.0  # [mm³]
         self.cavity_volume = 0.0  # [mm³]
         self.debris_density = 0.0  # [dimensionless]
-        self.flow_condition = (
-            0.0  # [dimensionless, 0-1] where 1 = maximum possible flow
-        )
+        self.flow_condition = 0.0  # [dimensionless, 0-1]
 
         # Legacy compatibility
         self.ion_channel = None  # (y, remaining μs)
         self.tau_deion = 6  # μs
 
+        # Cache for flow condition calculation
+        self._last_gap_um = -1.0
+        self._last_debris_density = -1.0
+        self._last_flow_condition = 0.0
+
     def update(self, state: EDMState) -> None:
-        """Update debris tracking and dielectric properties."""
+        """Optimized update with caching and reduced calculations."""
         # Update basic properties
         state.dielectric_temperature = self.temp_K
 
-        # Calculate current gap (convert from μm to mm for internal calculations)
+        # Calculate current gap with minimum value for numerical stability
         gap_um = max(0.001, state.workpiece_position - state.wire_position)  # [μm]
-        gap_mm = gap_um / 1000.0  # [mm]
 
-        # Calculate cavity volume
-        self.cavity_volume = self._calculate_cavity_volume(gap_mm)
+        # Fast cavity volume calculation (gap already in mm for this calc)
+        gap_mm = gap_um * 0.001  # Convert to mm
+        self.cavity_volume = self.cavity_volume_coeff * gap_mm
 
         # Add debris from fresh spark events (only real sparks, not short circuits)
         if state.spark_status[0] == 1 and state.spark_status[2] == 0:
-            # Use crater volume from material module if available (only for real sparks)
+            # Use crater volume from material module if available
             crater_volume = state.last_crater_volume
             if crater_volume > 0:
                 self.debris_volume += crater_volume
                 # Set up ionized channel for legacy compatibility
                 self.ion_channel = (state.spark_status[1], self.tau_deion)
 
-        # Calculate current flow condition
-        self.flow_condition = self._calculate_flow_condition(
-            gap_um, self.debris_density
-        )
-
-        # Remove debris via flow
-        if self.flow_condition > 0 and self.debris_volume > 0:
-            # Calculate debris removed in one timestep (1 μs)
-            # Use actual flow rate for debris removal: flow_condition * max_flow_rate
-            actual_flow_rate = self.flow_condition * self.f0  # [mm³/s]
-            dt_s = 1e-6  # 1 μs timestep in seconds
-            debris_removed = self.beta * actual_flow_rate * dt_s  # [mm³]
-            self.debris_volume = max(0.0, self.debris_volume - debris_removed)
-
         # Update debris density
         if self.cavity_volume > 0:
             self.debris_density = min(1.0, self.debris_volume / self.cavity_volume)
         else:
             self.debris_density = 0.0
+
+        # Calculate flow condition with caching
+        if (
+            abs(gap_um - self._last_gap_um) > 0.01
+            or abs(self.debris_density - self._last_debris_density) > 0.001
+        ):
+
+            # Gap-dependent factor (Poiseuille-like flow)
+            gap_factor = min(1.0, (gap_um / self.g_ref) ** 3)
+
+            # Debris obstruction factor using fast exponential
+            if self.k_debris * self.debris_density < 2.0:
+                debris_factor = fast_exp(self.k_debris * self.debris_density)
+            else:
+                debris_factor = np.exp(-self.k_debris * self.debris_density)
+
+            self.flow_condition = gap_factor * debris_factor
+
+            # Update cache
+            self._last_gap_um = gap_um
+            self._last_debris_density = self.debris_density
+            self._last_flow_condition = self.flow_condition
+        else:
+            # Use cached value
+            self.flow_condition = self._last_flow_condition
+
+        # Remove debris via flow (optimized with pre-computed rate)
+        if self.flow_condition > 0.001 and self.debris_volume > 0.001:
+            # Debris removed = β * f * dt, where f = flow_condition * f0
+            debris_removed = self.debris_removal_per_us * self.flow_condition
+            self.debris_volume = max(0.0, self.debris_volume - debris_removed)
 
         # Update ionized channel (legacy compatibility)
         if self.ion_channel:
@@ -93,52 +131,12 @@ class DielectricModule(EDMModule):
         state.debris_volume = self.debris_volume
         state.debris_density = self.debris_density
         state.cavity_volume = self.cavity_volume
-        state.flow_rate = (
-            self.flow_condition
-        )  # Now stores dimensionless flow condition (0-1)
+        state.flow_rate = self.flow_condition
 
         # Legacy compatibility
-        state.debris_concentration = self.debris_density  # Map to legacy field
-        state.dielectric_flow_rate = (
-            self.flow_condition * self.f0
-        ) / 1e9  # Convert to m³/s for legacy
+        state.debris_concentration = self.debris_density
+        state.dielectric_flow_rate = (self.flow_condition * self.f0) / 1e9
         state.ionized_channel = self.ion_channel
-
-    def _calculate_cavity_volume(self, gap_mm: float) -> float:
-        """
-        Calculate cavity volume as frontal half-cylinder.
-
-        V = π * r * h * g
-
-        Args:
-            gap_mm: Gap between wire and workpiece [mm]
-
-        Returns:
-            Cavity volume [mm³]
-        """
-        return np.pi * self.wire_radius * self.workpiece_height * gap_mm
-
-    def _calculate_flow_condition(self, gap_um: float, debris_density: float) -> float:
-        """
-        Calculate dielectric flow condition with gap and debris effects.
-
-        f_condition = f_gap(g) * f_debris(ρ)
-
-        Args:
-            gap_um: Gap between wire and workpiece [μm]
-            debris_density: Current debris density [dimensionless]
-
-        Returns:
-            Flow condition [dimensionless, 0-1] where 1 = maximum possible flow
-        """
-        # Gap-dependent factor (Poiseuille-like flow)
-        f_gap = min(1.0, (gap_um / self.g_ref) ** 3)
-
-        # Debris obstruction factor (exponential decay)
-        f_debris = np.exp(-self.k_debris * debris_density)
-
-        # Return normalized flow condition (0-1)
-        return f_gap * f_debris
 
     def reset_debris(self) -> None:
         """Reset debris tracking (useful for new simulations)."""
@@ -146,6 +144,8 @@ class DielectricModule(EDMModule):
         self.debris_density = 0.0
         self.cavity_volume = 0.0
         self.flow_condition = 0.0
+        self._last_gap_um = -1.0
+        self._last_debris_density = -1.0
 
     def get_debris_statistics(self) -> dict:
         """Get current debris tracking statistics."""

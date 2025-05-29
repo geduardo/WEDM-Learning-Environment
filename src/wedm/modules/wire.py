@@ -1,10 +1,78 @@
-# src/edm_env/modules/wire.py
+# src/wedm/modules/wire_optimized.py
 from __future__ import annotations
 
 import numpy as np
+from numba import njit, prange
 
 from ..core.module import EDMModule
 from ..core.state import EDMState
+
+
+# Numba-compiled functions for performance-critical calculations
+@njit(cache=True, fastmath=True)
+def compute_thermal_update(
+    T,
+    dT_dt,
+    n_segments,
+    spool_T,
+    k_cond_coeff,
+    I_squared,
+    joule_geom_factor,
+    rho_elec,
+    alpha_rho,
+    temp_ref,
+    plasma_idx,
+    plasma_heat,
+    h_eff_base,
+    h_eff_zone,
+    dielectric_temp,
+    A,
+    adv_coeff,
+    temp_update_factor,
+):
+    """Optimized thermal update computation using Numba."""
+    # Apply boundary condition
+    T[0] = spool_T
+
+    # Reset dT/dt
+    dT_dt[:] = 0.0
+
+    # 1) Conduction - optimized with single pass
+    if n_segments > 1:
+        # Interior points
+        for i in prange(1, n_segments - 1):
+            dT_dt[i] = k_cond_coeff * (T[i - 1] - 2 * T[i] + T[i + 1])
+
+        # Neumann BC at last segment
+        dT_dt[n_segments - 1] = k_cond_coeff * (T[n_segments - 2] - T[n_segments - 1])
+
+    # 2) Joule heating - fused operations
+    if I_squared > 1e-6:
+        joule_factor = joule_geom_factor * I_squared * rho_elec
+        for i in prange(n_segments):
+            rho_T = 1.0 + alpha_rho * (T[i] - temp_ref)
+            dT_dt[i] += joule_factor * rho_T
+
+    # 3) Plasma heating
+    if plasma_idx >= 0 and plasma_idx < n_segments:
+        dT_dt[plasma_idx] += plasma_heat
+
+    # 4) Convection - optimized with precomputed coefficients
+    for i in prange(n_segments):
+        conv_coeff = h_eff_zone[i] * A
+        dT_dt[i] -= conv_coeff * (T[i] - dielectric_temp)
+
+    # 5) Advection
+    if abs(adv_coeff) > 1e-9:
+        for i in prange(1, n_segments):
+            dT_dt[i] += adv_coeff * (T[i - 1] - T[i])
+
+    # 6) Temperature update
+    for i in prange(n_segments):
+        T[i] += dT_dt[i] * temp_update_factor
+
+    # Re-apply boundary condition
+    T[0] = spool_T
 
 
 class WireModule(EDMModule):
@@ -17,7 +85,8 @@ class WireModule(EDMModule):
         buffer_len_top: float = 30.0,
         spool_T: float = 293.15,
         segment_len: float = 0.2,
-        compute_zone_mean: bool = False,  # Enable zone mean calculation if needed
+        compute_zone_mean: bool = False,
+        zone_mean_interval: int = 100,  # Compute zone mean every N steps
     ):
         super().__init__(env)
 
@@ -25,7 +94,9 @@ class WireModule(EDMModule):
         self.buffer_top = buffer_len_top
         self.spool_T = spool_T
         self.seg_L = segment_len
-        self.compute_zone_mean = compute_zone_mean  # Store the setting
+        self.compute_zone_mean = compute_zone_mean
+        self.zone_mean_interval = zone_mean_interval
+        self.zone_mean_counter = 0
 
         self.total_L = self.buffer_bottom + env.workpiece_height + self.buffer_top
         self.n_segments = max(1, int(self.total_L / self.seg_L))
@@ -76,18 +147,11 @@ class WireModule(EDMModule):
 
         # Pre-allocate arrays for performance
         self.dT_dt = np.zeros(self.n_segments, dtype=np.float32)
-        self.T_rolled_plus1 = np.empty(self.n_segments, dtype=np.float32)
-        self.T_rolled_minus1 = np.empty(self.n_segments, dtype=np.float32)
-        self.q_cond_arr = np.empty(self.n_segments, dtype=np.float32)
-        self.rho_T_arr = np.empty(self.n_segments, dtype=np.float32)
-        self.q_joule_arr = np.empty(self.n_segments, dtype=np.float32)
-        self.q_plasma_arr = np.zeros(self.n_segments, dtype=np.float32)
-        self.T_minus_Tdielectric = np.empty(self.n_segments, dtype=np.float32)
-        self.q_conv_arr = np.empty(self.n_segments, dtype=np.float32)
-        self.q_adv_arr = np.empty(self.n_segments, dtype=np.float32)
-        self.Trolled_m1_minus_T = np.empty(self.n_segments, dtype=np.float32)
 
-        # Zone boundaries (for post-processing if needed)
+        # Pre-compute zone-specific heat transfer coefficients
+        self.h_eff_zone = np.zeros(self.n_segments, dtype=np.float32)
+
+        # Zone boundaries
         self.actual_zone_start = min(self.zone_start, self.n_segments - 1)
         self.actual_zone_end = min(self.zone_end, self.n_segments)
 
@@ -95,6 +159,10 @@ class WireModule(EDMModule):
             self.zone_size = self.actual_zone_end - self.actual_zone_start
         else:
             self.zone_size = 1
+
+        # Cache for last computed zone mean
+        self._last_zone_mean = self.spool_T
+        self._last_flow_condition = 0.0
 
     def update(self, state: EDMState) -> None:
         if state.is_wire_broken:
@@ -108,161 +176,94 @@ class WireModule(EDMModule):
             )
             T = state.wire_temperature
 
-        # Initialize dT/dt
-        self.dT_dt.fill(0.0)
-
         # Cache lookups for efficiency
         I = state.current or 0.0
         I_squared = I * I
         dielectric_temp = state.dielectric_temperature
         wire_unwind_vel = state.wire_unwinding_velocity
 
-        # Apply boundary condition
-        if self.n_segments >= 1:
-            T[0] = self.spool_T
+        # Update convection coefficients only when flow condition changes significantly
+        flow_condition = state.flow_rate
+        if abs(flow_condition - self._last_flow_condition) > 0.01:
+            self._update_convection_coefficients(wire_unwind_vel, flow_condition)
+            self._last_flow_condition = flow_condition
 
-        # 1) Heat conduction
-        if self.n_segments > 1:
-            # Optimized array setup (avoid np.roll overhead)
-            self.T_rolled_plus1[0] = T[-1]
-            self.T_rolled_plus1[1:] = T[:-1]
-            self.T_rolled_minus1[:-1] = T[1:]
-            self.T_rolled_minus1[-1] = T[0]
-        else:
-            self.T_rolled_plus1[0] = T[0]
-            self.T_rolled_minus1[0] = T[0]
-
-        # Fused conduction calculation
-        np.add(self.T_rolled_plus1, self.T_rolled_minus1, out=self.q_cond_arr)
-        np.subtract(self.q_cond_arr, T, out=self.q_cond_arr)
-        np.subtract(self.q_cond_arr, T, out=self.q_cond_arr)
-        np.multiply(self.q_cond_arr, self.k_cond_coeff, out=self.q_cond_arr)
-
-        # Apply Neumann boundary condition
-        if self.n_segments > 1:
-            idx_last = self.n_segments - 1
-            self.q_cond_arr[idx_last] = self.k_cond_coeff * (
-                T[idx_last - 1] - T[idx_last]
-            )
-
-        np.add(self.dT_dt, self.q_cond_arr, out=self.dT_dt)
-
-        # 2) Joule heating
-        if I_squared > 1e-6:  # Skip only for truly zero current
-            np.subtract(T, self.temp_ref, out=self.rho_T_arr)
-            np.multiply(self.rho_T_arr, self.alpha_rho, out=self.rho_T_arr)
-            np.add(self.rho_T_arr, 1.0, out=self.rho_T_arr)
-            np.multiply(self.rho_T_arr, self.rho_elec, out=self.rho_T_arr)
-
-            joule_coeff = self.joule_geom_factor * I_squared
-            np.multiply(self.rho_T_arr, joule_coeff, out=self.q_joule_arr)
-            np.add(self.dT_dt, self.q_joule_arr, out=self.dT_dt)
-
-        # 3) Plasma heating
-        self.q_plasma_arr.fill(0.0)
+        # Prepare plasma heating
+        plasma_idx = -1
+        plasma_heat = 0.0
         if state.spark_status[0] == 1 and state.spark_status[1] is not None:
             y_spark = state.spark_status[1]
-            idx = (
+            plasma_idx = (
                 self.zone_start + int(y_spark // self.seg_L)
                 if self.seg_L != 0
                 else self.zone_start
             )
-            if 0 <= idx < self.n_segments:
+            if 0 <= plasma_idx < self.n_segments:
                 voltage = state.voltage if state.voltage is not None else 0.0
-                q_plasma_val = self.eta_plasma * voltage * I
-                if np.isfinite(q_plasma_val):
-                    self.q_plasma_arr[idx] = q_plasma_val
-        np.add(self.dT_dt, self.q_plasma_arr, out=self.dT_dt)
+                plasma_heat = self.eta_plasma * voltage * I
+                if not np.isfinite(plasma_heat):
+                    plasma_heat = 0.0
 
-        # 4) Convection
-        h_eff = self.h_conv * (1.0 + 0.5 * wire_unwind_vel)
-
-        # Get flow condition from dielectric module (dimensionless 0-1)
-        flow_condition = state.flow_rate  # This is now the dimensionless flow condition
-
-        # Calculate two convection coefficients: baseline and flow-enhanced
-        baseline_conv_coeff = h_eff * self.A
-        # Flow enhances convection: h_flow = h_base * (1 + flow_condition)
-        # When flow_condition = 1 (max flow), convection doubles
-        # When flow_condition = 0 (no flow), convection is baseline
-        flow_enhanced_conv_coeff = baseline_conv_coeff * (1.0 + flow_condition)
-
-        # Apply convection with zone-specific coefficients
-        np.subtract(T, dielectric_temp, out=self.T_minus_Tdielectric)
-
-        # Buffer zones use baseline convection
-        if self.actual_zone_start > 0:
-            s1 = slice(None, self.actual_zone_start)
-            np.multiply(
-                self.T_minus_Tdielectric[s1],
-                baseline_conv_coeff,
-                out=self.q_conv_arr[s1],
-            )
-
-        # Workpiece zone uses flow-enhanced convection
-        if self.actual_zone_start < self.actual_zone_end:
-            s2 = slice(self.actual_zone_start, self.actual_zone_end)
-            np.multiply(
-                self.T_minus_Tdielectric[s2],
-                flow_enhanced_conv_coeff,
-                out=self.q_conv_arr[s2],
-            )
-
-        # Top buffer zone uses baseline convection
-        if self.actual_zone_end < self.n_segments:
-            s3 = slice(self.actual_zone_end, None)
-            np.multiply(
-                self.T_minus_Tdielectric[s3],
-                baseline_conv_coeff,
-                out=self.q_conv_arr[s3],
-            )
-
-        np.subtract(self.dT_dt, self.q_conv_arr, out=self.dT_dt)
-
-        # 5) Advection
-        if abs(wire_unwind_vel) > 1e-6:  # Skip only for truly zero velocity
+        # Advection coefficient
+        if abs(wire_unwind_vel) > 1e-6:
             v_wire = wire_unwind_vel * 1e-3  # m s⁻¹
             adv_coeff = self.rho * self.cp * v_wire * self.S / self.delta_y
-            np.subtract(self.T_rolled_minus1, T, out=self.Trolled_m1_minus_T)
-            np.multiply(self.Trolled_m1_minus_T, adv_coeff, out=self.q_adv_arr)
-            np.add(self.dT_dt, self.q_adv_arr, out=self.dT_dt)
+        else:
+            adv_coeff = 0.0
 
-        # 6) Temperature update
-        np.multiply(self.dT_dt, self.temp_update_factor, out=self.dT_dt)
-        np.add(T, self.dT_dt, out=T)
+        # Call optimized Numba function
+        compute_thermal_update(
+            T,
+            self.dT_dt,
+            self.n_segments,
+            self.spool_T,
+            self.k_cond_coeff,
+            I_squared,
+            self.joule_geom_factor,
+            self.rho_elec,
+            self.alpha_rho,
+            self.temp_ref,
+            plasma_idx,
+            plasma_heat,
+            self.h_conv,
+            self.h_eff_zone,
+            dielectric_temp,
+            self.A,
+            adv_coeff,
+            self.temp_update_factor,
+        )
 
-        # Re-apply boundary condition
-        if self.n_segments >= 1:
-            T[0] = self.spool_T
-
-        # Compute zone mean if requested (for logging/monitoring)
+        # Compute zone mean only when needed
         if self.compute_zone_mean:
-            state.wire_average_temperature = self.compute_zone_mean_temperature(T)
-        # Note: When compute_zone_mean=False, wire_average_temperature can be computed
-        # post-processing from the full temperature field if needed
+            self.zone_mean_counter += 1
+            if self.zone_mean_counter >= self.zone_mean_interval:
+                self._last_zone_mean = self._compute_zone_mean_fast(T)
+                state.wire_average_temperature = self._last_zone_mean
+                self.zone_mean_counter = 0
+            else:
+                # Use cached value
+                state.wire_average_temperature = self._last_zone_mean
+
+    def _update_convection_coefficients(
+        self, wire_unwind_vel: float, flow_condition: float
+    ):
+        """Update zone-specific convection coefficients."""
+        h_eff_base = self.h_conv * (1.0 + 0.5 * wire_unwind_vel)
+        h_eff_enhanced = h_eff_base * (1.0 + flow_condition)
+
+        # Fill array with appropriate values
+        self.h_eff_zone.fill(h_eff_base)
+        if self.actual_zone_start < self.actual_zone_end:
+            self.h_eff_zone[self.actual_zone_start : self.actual_zone_end] = (
+                h_eff_enhanced
+            )
+
+    def _compute_zone_mean_fast(self, T: np.ndarray) -> float:
+        """Fast zone mean computation."""
+        if self.zone_size > 0 and self.actual_zone_end <= len(T):
+            return float(np.mean(T[self.actual_zone_start : self.actual_zone_end]))
+        return float(np.mean(T))
 
     def compute_zone_mean_temperature(self, temperature_field: np.ndarray) -> float:
-        """
-        Compute zone mean temperature from full temperature field.
-
-        This is more efficient than computing every microsecond when you only
-        need it occasionally (e.g., for logging or post-processing).
-
-        Args:
-            temperature_field: Full wire temperature array
-
-        Returns:
-            Average temperature in the work zone [K]
-        """
-        if len(temperature_field) == 0:
-            return self.spool_T
-        elif self.zone_size > 0 and self.actual_zone_end <= len(temperature_field):
-            # Optimized zone mean using slice and sum
-            zone_sum = temperature_field[
-                self.actual_zone_start : self.actual_zone_end
-            ].sum()
-            return float(zone_sum / self.zone_size)
-        elif self.actual_zone_start < len(temperature_field):
-            return float(temperature_field[self.actual_zone_start])
-        else:
-            return float(temperature_field.mean())
+        """Public method for on-demand zone mean calculation."""
+        return self._compute_zone_mean_fast(temperature_field)

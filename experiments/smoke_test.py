@@ -160,6 +160,8 @@ def run_simulation(
     controller = create_gap_controller()
     action = controller(env)
 
+    # Print simulation start message
+    print(f"🚀 Starting simulation for {max_steps:,} µs...")
     start_time = time.time()
 
     for step in range(max_steps):
@@ -181,6 +183,10 @@ def run_simulation(
             break
 
     wall_time = time.time() - start_time
+
+    # Print simulation completion message
+    print(f"✅ Simulation completed! Took {wall_time:.2f} seconds")
+
     logger.finalize()
     log_data = logger.get_data()
 
@@ -600,12 +606,17 @@ def main():
         default="full_field",
         help="Temperature logging strategy (default: full_field)",
     )
+    parser.add_argument(
+        "--no-log",
+        action="store_true",
+        help="Disable saving log files (keep only minimal data in memory)",
+    )
 
     args = parser.parse_args()
 
     # Setup
     logger_config = setup_logger(
-        args.mode, log_to_file=True, log_strategy=args.log_strategy
+        args.mode, log_to_file=not args.no_log, log_strategy=args.log_strategy
     )
     env = initialize_environment(args.mode, seed=0, log_strategy=args.log_strategy)
 
@@ -616,11 +627,17 @@ def main():
 
     # Plotting
     if args.plot:
-        data = load_simulation_data(log_data, logger_config)
-        if data is not None:
-            plot_simulation_results(data, args.mode)
-            # Show crater histogram after main plot is closed
-            plot_crater_histogram(env)
+        if args.no_log:
+            print(
+                f"\n⚠️  Warning: Plotting requested but logging is disabled. No data available for plotting."
+            )
+        else:
+            print(f"\n📊 Starting plotting phase...")
+            data = load_simulation_data(log_data, logger_config)
+            if data is not None:
+                plot_simulation_results(data, args.mode)
+                # Show crater histogram after main plot is closed
+                plot_crater_histogram(env)
 
 
 if __name__ == "__main__":
