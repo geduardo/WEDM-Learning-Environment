@@ -176,9 +176,47 @@ class WireModule(EDMModule):
 
         # 4) Convection
         h_eff = self.h_conv * (1.0 + 0.5 * wire_unwind_vel)
-        conv_coeff = h_eff * self.A
+
+        # Get flow condition from dielectric module (dimensionless 0-1)
+        flow_condition = state.flow_rate  # This is now the dimensionless flow condition
+
+        # Calculate two convection coefficients: baseline and flow-enhanced
+        baseline_conv_coeff = h_eff * self.A
+        # Flow enhances convection: h_flow = h_base * (1 + flow_condition)
+        # When flow_condition = 1 (max flow), convection doubles
+        # When flow_condition = 0 (no flow), convection is baseline
+        flow_enhanced_conv_coeff = baseline_conv_coeff * (1.0 + flow_condition)
+
+        # Apply convection with zone-specific coefficients
         np.subtract(T, dielectric_temp, out=self.T_minus_Tdielectric)
-        np.multiply(self.T_minus_Tdielectric, conv_coeff, out=self.q_conv_arr)
+
+        # Buffer zones use baseline convection
+        if self.actual_zone_start > 0:
+            s1 = slice(None, self.actual_zone_start)
+            np.multiply(
+                self.T_minus_Tdielectric[s1],
+                baseline_conv_coeff,
+                out=self.q_conv_arr[s1],
+            )
+
+        # Workpiece zone uses flow-enhanced convection
+        if self.actual_zone_start < self.actual_zone_end:
+            s2 = slice(self.actual_zone_start, self.actual_zone_end)
+            np.multiply(
+                self.T_minus_Tdielectric[s2],
+                flow_enhanced_conv_coeff,
+                out=self.q_conv_arr[s2],
+            )
+
+        # Top buffer zone uses baseline convection
+        if self.actual_zone_end < self.n_segments:
+            s3 = slice(self.actual_zone_end, None)
+            np.multiply(
+                self.T_minus_Tdielectric[s3],
+                baseline_conv_coeff,
+                out=self.q_conv_arr[s3],
+            )
+
         np.subtract(self.dT_dt, self.q_conv_arr, out=self.dT_dt)
 
         # 5) Advection

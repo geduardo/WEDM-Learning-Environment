@@ -21,7 +21,7 @@ from src.wedm.envs import WireEDMEnv
 from src.wedm.utils.logger import SimulationLogger, LoggerConfig
 
 
-def create_gap_controller(desired_gap: float = 1.0):  # µm
+def create_gap_controller(desired_gap: float = 15.0):  # µm
     """Create adaptive gap controller that works with both control modes."""
 
     def controller(env: WireEDMEnv) -> Dict[str, Any]:
@@ -73,6 +73,10 @@ def setup_logger(
         "wire_velocity",
         "workpiece_position",
         "target_delta",
+        "debris_concentration",
+        "dielectric_flow_rate",
+        "is_short_circuit",
+        "flow_rate",  # Dimensionless flow condition (0-1)
     ]
 
     # Add temperature signals based on strategy
@@ -281,7 +285,7 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
     t_ms = np.array(data["time"]) / 1000.0
     target_unit = "µm" if control_mode == "position" else "µm/s"
 
-    fig, axes = plt.subplots(5, 1, sharex=True, figsize=(10, 12))
+    fig, axes = plt.subplots(7, 1, sharex=True, figsize=(10, 16))
 
     # Position the plot window in the center of the screen
     try:
@@ -401,9 +405,53 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
             t_ms, temp_celsius, label="Avg Wire Temp (computed)", color="purple"
         )
     axes[4].set_ylabel("Temperature [°C]")
-    axes[4].set_xlabel("Time [ms]")
     axes[4].legend()
     axes[4].grid(True, alpha=0.3)
+
+    # 6. Dielectric flow condition and debris concentration
+    ax_debris = axes[5]  # Left y-axis for debris concentration
+    ax_flow = ax_debris.twinx()  # Right y-axis for flow condition
+
+    if "debris_concentration" in data:
+        ax_debris.plot(
+            t_ms,
+            data["debris_concentration"],
+            label="Debris Concentration",
+            color="brown",
+        )
+    if "flow_rate" in data:
+        # flow_rate is now dimensionless (0-1)
+        ax_flow.plot(t_ms, data["flow_rate"], label="Flow Condition", color="cyan")
+
+    ax_debris.set_ylabel("Debris Concentration", color="brown")
+    ax_debris.tick_params(axis="y", labelcolor="brown")
+    ax_flow.set_ylabel("Flow Condition (0-1)", color="cyan")
+    ax_flow.tick_params(axis="y", labelcolor="cyan")
+    ax_flow.set_ylim(0, 1.1)  # Set fixed range for flow condition
+
+    # Combine legends from both axes
+    lines_debris, labels_debris = ax_debris.get_legend_handles_labels()
+    lines_flow, labels_flow = ax_flow.get_legend_handles_labels()
+    ax_debris.legend(
+        lines_debris + lines_flow, labels_debris + labels_flow, loc="upper left"
+    )
+    ax_debris.grid(True, alpha=0.3)
+
+    # 7. Short circuit status
+    if "is_short_circuit" in data:
+        # Convert boolean to numeric for plotting
+        short_circuit_numeric = np.array(data["is_short_circuit"]).astype(int)
+        axes[6].plot(
+            t_ms, short_circuit_numeric, label="Short Circuit", color="red", linewidth=2
+        )
+        axes[6].fill_between(t_ms, 0, short_circuit_numeric, alpha=0.3, color="red")
+    axes[6].set_ylabel("Short Circuit")
+    axes[6].set_xlabel("Time [ms]")
+    axes[6].set_ylim(-0.1, 1.1)  # Give some padding around 0 and 1
+    axes[6].set_yticks([0, 1])
+    axes[6].set_yticklabels(["No", "Yes"])
+    axes[6].legend()
+    axes[6].grid(True, alpha=0.3)
 
     # Calculate and display spark count in last 100ms
     if "current" in data and len(data["current"]) > 0:
@@ -418,11 +466,20 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
         # Count rising edges: where current goes from <= threshold to > threshold
         spark_count = np.sum(np.diff(above_threshold.astype(int)) > 0)
 
+        # Count short circuits in last 100ms if available
+        short_circuit_text = ""
+        if "is_short_circuit" in data:
+            short_circuit_last_100ms = np.array(data["is_short_circuit"])[
+                last_100ms_mask
+            ]
+            short_circuit_count = np.sum(short_circuit_last_100ms)
+            short_circuit_text = f", Short circuits: {short_circuit_count}"
+
         # Add text annotation to the plot
         fig.text(
             0.02,
             0.02,
-            f"Sparks in last 100ms: {spark_count}",
+            f"Last 100ms - Sparks: {spark_count}{short_circuit_text}",
             fontsize=12,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue"),
         )

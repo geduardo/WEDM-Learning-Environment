@@ -81,7 +81,7 @@ class IgnitionModule(EDMModule):
     def _update_short_circuit_detection(self, state: EDMState) -> None:
         """Update short circuit flag based on gap."""
         gap = max(0.0, state.workpiece_position - state.wire_position)
-        state.is_short_circuit = gap < 10.0
+        state.is_short_circuit = gap < 2.0
 
     def _handle_idle_state(self, state: EDMState) -> None:
         """Handle idle state (state 0)."""

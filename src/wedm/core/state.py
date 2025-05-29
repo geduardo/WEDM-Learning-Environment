@@ -76,7 +76,9 @@ class EDMState:
     debris_volume: float = 0.0  # [mm³] Total volume of debris particles
     debris_density: float = 0.0  # [dimensionless] Debris density ratio (0-1)
     cavity_volume: float = 0.0  # [mm³] Total cavity volume between wire and workpiece
-    flow_rate: float = 0.0  # [mm³/s] Current dielectric flow rate
+    flow_rate: float = (
+        0.0  # [dimensionless] Dielectric flow condition (0-1, where 1 = maximum possible flow)
+    )
     last_crater_volume: float = 0.0  # [mm³] Volume of last crater for debris tracking
 
     # Short circuit detection (updated by ignition module)
