@@ -25,7 +25,7 @@ class DielectricModule(EDMModule):
         self,
         env,
         base_flow_rate: float = 100.0,  # [mm³/s] Base pump/nozzle capacity
-        debris_removal_efficiency: float = 0.05,  # β: Debris removal efficiency
+        debris_removal_efficiency: float = 0.01,  # β: Debris removal efficiency
         debris_obstruction_coeff: float = 1,  # k_debris: How much debris blocks flow
         reference_gap: float = 25.0,  # [μm] Reference gap for flow calculations
     ):

@@ -23,6 +23,13 @@ class WireEDMEnv(gym.Env):
         *,
         render_mode: str | None = None,
         mechanics_control_mode: str = "position",
+        workpiece_height: float = 10.0,
+        wire_diameter: float = 0.2,
+        ignition_params: dict | None = None,
+        material_params: dict | None = None,
+        dielectric_params: dict | None = None,
+        wire_params: dict | None = None,
+        mechanics_params: dict | None = None,
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -40,8 +47,8 @@ class WireEDMEnv(gym.Env):
         self.servo_interval = 1_000
 
         # workpiece / wire constants
-        self.workpiece_height = 10.0  # mm
-        self.wire_diameter = 0.2  # mm
+        self.workpiece_height = workpiece_height  # mm
+        self.wire_diameter = wire_diameter  # mm
 
         # RNG
         self.np_random = np.random.default_rng()
@@ -49,12 +56,29 @@ class WireEDMEnv(gym.Env):
         # global state
         self.state = EDMState()
 
-        # modules
-        self.ignition = IgnitionModule(self)
-        self.material = MaterialRemovalModule(self)
-        self.dielectric = DielectricModule(self)
-        self.wire = WireModule(self)
-        self.mechanics = MechanicsModule(self, control_mode=mechanics_control_mode)
+        # modules with optional parameters
+        ignition_params = ignition_params or {}
+        material_params = material_params or {}
+        dielectric_params = dielectric_params or {}
+        wire_params = wire_params or {}
+        mechanics_params = mechanics_params or {}
+
+        self.ignition = IgnitionModule(self, **ignition_params)
+        self.material = MaterialRemovalModule(self, **material_params)
+        self.dielectric = DielectricModule(self, **dielectric_params)
+        self.wire = WireModule(self, **wire_params)
+        self.mechanics = MechanicsModule(
+            self, control_mode=mechanics_control_mode, **mechanics_params
+        )
+
+        # Store module references for easy access
+        self.modules = {
+            "ignition": self.ignition,
+            "material": self.material,
+            "dielectric": self.dielectric,
+            "wire": self.wire,
+            "mechanics": self.mechanics,
+        }
 
         # ── action space ─────────────────────────────────────────────
         # Note: target_delta interpretation depends on control mode:

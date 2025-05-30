@@ -196,8 +196,8 @@ def initialize_environment(
         print(f"📊 Zone mean calculation: DISABLED (strategy: {log_strategy})")
 
     # Set initial conditions
-    env.state.workpiece_position = 40.0  # µm
-    env.state.wire_position = 30.0  # µm
+    env.state.workpiece_position = 70.0  # µm
+    env.state.wire_position = 10.0  # µm
     env.state.target_position = 5_000.0  # µm
     env.state.spark_status = [0, None, 0]
     env.state.dielectric_temperature = 293.15  # Room temperature in K
@@ -483,7 +483,6 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
 
     # Set labels and colors for dual axes
     ax_voltage.set_ylabel("Voltage [V]", color="blue")
-    ax_voltage.tick_params(axis="y", labelcolor="blue")
     ax_current.set_ylabel("Current [A]", color="red")
     ax_current.tick_params(axis="y", labelcolor="red")
 
@@ -567,7 +566,6 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
         ax_flow.plot(t_ms, data["flow_rate"], label="Flow Condition", color="cyan")
 
     ax_debris.set_ylabel("Debris Concentration", color="brown")
-    ax_debris.tick_params(axis="y", labelcolor="brown")
     ax_flow.set_ylabel("Flow Condition (0-1)", color="cyan")
     ax_flow.tick_params(axis="y", labelcolor="cyan")
     ax_flow.set_ylim(0, 1.1)  # Set fixed range for flow condition
@@ -596,33 +594,52 @@ def plot_simulation_results(data: Any, control_mode: str) -> None:
     axes[6].legend()
     axes[6].grid(True, alpha=0.3)
 
-    # Calculate and display spark count in last 100ms
+    # Calculate and display spark count in last 200ms
     if "current" in data and len(data["current"]) > 0:
         current = np.array(data["current"])
-        # Find indices for last 100ms
-        last_100ms_mask = t_ms >= (t_ms[-1] - 100.0)
-        current_last_100ms = current[last_100ms_mask]
+        # Find indices for last 200ms
+        last_200ms_mask = t_ms >= (t_ms[-1] - 200.0)
+        current_last_200ms = current[last_200ms_mask]
 
-        # Count sparks by detecting threshold crossings (transitions from below to above)
+        # Count sparks and short pulses without double counting
+        # NOTE: Sparks = current pulses NOT during short circuits
+        #       Short pulses = current pulses DURING short circuits
         spark_threshold = 0.1  # A
-        above_threshold = current_last_100ms > spark_threshold
-        # Count rising edges: where current goes from <= threshold to > threshold
-        spark_count = np.sum(np.diff(above_threshold.astype(int)) > 0)
 
-        # Count short circuits in last 100ms if available
-        short_circuit_text = ""
         if "is_short_circuit" in data:
-            short_circuit_last_100ms = np.array(data["is_short_circuit"])[
-                last_100ms_mask
+            # Count short circuits in last 200ms if available
+            short_circuit_last_200ms = np.array(data["is_short_circuit"])[
+                last_200ms_mask
             ]
-            short_circuit_count = np.sum(short_circuit_last_100ms)
-            short_circuit_text = f", Short circuits: {short_circuit_count}"
+
+            # Count short circuit pulses: current pulses that occurred during short circuit
+            # This gives us the number of actual current pulses delivered during shorts,
+            # not just the total time spent in short circuit state
+            short_above_threshold = (
+                current_last_200ms > spark_threshold
+            ) & short_circuit_last_200ms
+            short_pulse_count = np.sum(np.diff(short_above_threshold.astype(int)) > 0)
+
+            # Count normal sparks: current pulses that occurred when NOT in short circuit
+            normal_above_threshold = (current_last_200ms > spark_threshold) & (
+                ~short_circuit_last_200ms
+            )
+            spark_count = np.sum(np.diff(normal_above_threshold.astype(int)) > 0)
+
+            display_text = (
+                f"Last 200ms - Sparks: {spark_count}, Short pulses: {short_pulse_count}"
+            )
+        else:
+            # If no short circuit data, count all current pulses as sparks (fallback)
+            above_threshold = current_last_200ms > spark_threshold
+            spark_count = np.sum(np.diff(above_threshold.astype(int)) > 0)
+            display_text = f"Last 200ms - Sparks: {spark_count}"
 
         # Add text annotation to the plot
         fig.text(
             0.02,
             0.02,
-            f"Last 100ms - Sparks: {spark_count}{short_circuit_text}",
+            display_text,
             fontsize=12,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue"),
         )

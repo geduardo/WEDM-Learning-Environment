@@ -21,6 +21,14 @@ class IgnitionModule(EDMModule):
         gap_coefficient: float = 0.02,  # How gap affects critical density (per μm)
         max_critical_density: float = 0.95,  # Maximum critical density
         hard_short_gap: float = 2.0,  # Gap for guaranteed short circuit
+        # Random short circuit parameters
+        random_short_probability_per_us: float = 0.001,  # DEPRECATED: Base probability per microsecond
+        random_short_gap_coefficient: float = 2,  # DEPRECATED: How gap affects random short probability (per μm)
+        random_short_duration: int = 100,  # Duration of random shorts in microseconds
+        # Linear random short circuit model parameters
+        random_short_min_gap: float = 2.0,  # Gap below which probability is maximum [μm]
+        random_short_max_gap: float = 50.0,  # Gap above which probability is zero [μm]
+        random_short_max_probability: float = 0.001,  # Maximum probability per microsecond
     ):
         super().__init__(env)
         self.lambda_cache: dict[float, float] = {}
@@ -30,6 +38,19 @@ class IgnitionModule(EDMModule):
         self.gap_coefficient = gap_coefficient
         self.max_critical_density = max_critical_density
         self.hard_short_gap = hard_short_gap
+
+        # Random short circuit parameters
+        # self.random_short_prob_base = random_short_probability_per_us  # No longer used
+        # self.random_short_gap_coeff = random_short_gap_coefficient      # No longer used
+        self.random_short_duration = random_short_duration
+
+        # Linear random short circuit model parameters
+        self.random_short_min_gap = random_short_min_gap
+        self.random_short_max_gap = random_short_max_gap
+        self.random_short_max_probability = random_short_max_probability
+
+        # Track active random short circuit
+        self.random_short_remaining = 0  # Remaining microseconds of random short
 
         # Load machine current modes data
         self.currents_data = self._load_currents_data()
@@ -122,8 +143,36 @@ class IgnitionModule(EDMModule):
         # Get debris density from state (default to 0 if not available)
         debris_density = getattr(state, "debris_density", 0.0)
 
+        # Check for active random short circuit first
+        if self.random_short_remaining > 0:
+            self.random_short_remaining -= 1
+            state.is_short_circuit = True
+            return
+
         # Use critical debris model for short circuit detection
-        state.is_short_circuit = self._detect_critical_debris_short(gap, debris_density)
+        debris_short = self._detect_critical_debris_short(gap, debris_density)
+
+        # Check for random gap-dependent short circuit
+        # Linear probability: 0% at gap > max_gap, max_probability at gap < min_gap, linear in between
+
+        if gap >= self.random_short_max_gap:
+            random_short_prob = 0.0
+        elif gap <= self.random_short_min_gap:
+            random_short_prob = self.random_short_max_probability
+        else:
+            # Linear interpolation between max_probability and 0%
+            gap_factor = 1.0 - (gap - self.random_short_min_gap) / (
+                self.random_short_max_gap - self.random_short_min_gap
+            )
+            random_short_prob = gap_factor * self.random_short_max_probability
+
+        # Roll dice for random short circuit (only when not already in short circuit)
+        if not debris_short and self.env.np_random.random() < random_short_prob:
+            # Initiate random short circuit
+            self.random_short_remaining = self.random_short_duration
+            state.is_short_circuit = True
+        else:
+            state.is_short_circuit = debris_short
 
     def _handle_idle_state(self, state: EDMState) -> None:
         """Handle idle state (state 0)."""
@@ -244,3 +293,13 @@ class IgnitionModule(EDMModule):
 
         critical_density = self.base_critical_density + self.gap_coefficient * gap
         return min(critical_density, self.max_critical_density)
+
+    def get_short_circuit_status(self) -> dict:
+        """
+        Get detailed short circuit status.
+        Returns dict with type of short circuit and remaining duration.
+        """
+        return {
+            "has_random_short": self.random_short_remaining > 0,
+            "random_short_remaining_us": self.random_short_remaining,
+        }
