@@ -1,4 +1,4 @@
-# src/wedm/modules/ignition_optimized.py
+# src/edm_env/modules/ignition.py
 from __future__ import annotations
 
 import json
@@ -7,20 +7,29 @@ from pathlib import Path
 
 from ..core.module import EDMModule
 from ..core.state import EDMState
+from ..core.state_utils import is_short_circuited
 
 
 class IgnitionModule(EDMModule):
-    """Optimized stochastic plasma-channel ignition model."""
+    """Stochastic plasma-channel ignition model with critical debris short circuit detection."""
 
-    def __init__(self, env):
+    def __init__(
+        self,
+        env,
+        # Critical debris model parameters
+        base_critical_density: float = 0.3,  # Critical density at zero gap
+        gap_coefficient: float = 0.02,  # How gap affects critical density (per μm)
+        max_critical_density: float = 0.95,  # Maximum critical density
+        hard_short_gap: float = 2.0,  # Gap for guaranteed short circuit
+    ):
         super().__init__(env)
+        self.lambda_cache: dict[float, float] = {}
 
-        # Enhanced lambda caching with tolerance-based lookup
-        self.lambda_cache: dict[int, float] = {}  # Use integer micrometers as keys
-        self.gap_tolerance = 0.1  # Cache tolerance in micrometers
-
-        # Pre-compute constants for lambda calculation
-        self.ln2 = np.log(2)
+        # Critical debris model parameters
+        self.base_critical_density = base_critical_density
+        self.gap_coefficient = gap_coefficient
+        self.max_critical_density = max_critical_density
+        self.hard_short_gap = hard_short_gap
 
         # Load machine current modes data
         self.currents_data = self._load_currents_data()
@@ -29,13 +38,9 @@ class IgnitionModule(EDMModule):
         self._cached_current_mode: str | None = None
         self._cached_current_value: float = 60.0  # Default to I5 current
 
-        # Pre-compute state transition times
-        self._cached_on_time: float = 3.0
-        self._cached_off_time: float = 80.0
-        self._cached_total_time: float = 83.0
-
     def _load_currents_data(self) -> dict:
         """Load current mode mappings from currents.json."""
+        # Get the path relative to this module
         current_dir = Path(__file__).parent
         json_path = current_dir / "currents.json"
 
@@ -48,11 +53,14 @@ class IgnitionModule(EDMModule):
 
     def _get_current_from_mode(self, current_mode: str | None) -> float:
         """Get actual current value from current mode with caching."""
+        # Only recalculate if current_mode has changed
         if current_mode != self._cached_current_mode:
             if current_mode is None:
                 current_mode = "I5"
 
+            # Get actual current from current mode (0-18 maps to I1-I19)
             if current_mode not in self.currents_data:
+                # Fallback to I5 if invalid mode (middle range)
                 current_mode = "I5"
 
             self._cached_current_value = self.currents_data[current_mode]["Current"]
@@ -60,122 +68,179 @@ class IgnitionModule(EDMModule):
 
         return self._cached_current_value
 
-    def update(self, state: EDMState) -> None:
-        """Optimized update with reduced function calls and caching."""
+    def _detect_critical_debris_short(self, gap: float, debris_density: float) -> bool:
+        """
+        Detect short circuit based on critical debris density model.
 
-        # Step 1: Fast short circuit detection
-        gap = state.workpiece_position - state.wire_position
-        state.is_short_circuit = gap < 2.0
+        Short circuit occurs when:
+        1. Gap < hard_short_gap (physical contact), OR
+        2. Debris density exceeds critical value for the current gap
+
+        Critical density increases linearly with gap:
+        ρ_crit = base_critical_density + gap_coefficient * gap
+        """
+        # Hard short circuit for very small gaps
+        if gap < self.hard_short_gap:
+            return True
+
+        # Calculate critical debris density for this gap
+        critical_density = self.base_critical_density + self.gap_coefficient * gap
+        critical_density = min(critical_density, self.max_critical_density)
+
+        # Short circuit if debris exceeds critical density
+        return debris_density > critical_density
+
+    # ------------------------------------------------------------------ #
+    # Public
+    # ------------------------------------------------------------------ #
+    def update(self, state: EDMState) -> None:
+        """Update ignition state with clear, simple logic."""
+
+        # Step 1: Update short circuit detection with debris consideration
+        self._update_short_circuit_detection(state)
 
         # Step 2: Force voltage to 0 if short circuit
         if state.is_short_circuit:
             state.voltage = 0
 
-        # Step 3: Optimized state machine with cached values
+        # Step 3: Handle state machine
         spark_state = state.spark_status[0]
 
-        # Cache timing parameters if they changed
-        if state.ON_time and state.ON_time != self._cached_on_time:
-            self._cached_on_time = state.ON_time
-            self._update_total_time()
-        if state.OFF_time and state.OFF_time != self._cached_off_time:
-            self._cached_off_time = state.OFF_time
-            self._update_total_time()
+        if spark_state == 0:
+            self._handle_idle_state(state)
+        elif spark_state == 1:
+            self._handle_spark_state(state)
+        elif spark_state == -1:
+            self._handle_short_state(state)
+        elif spark_state == -2:
+            self._handle_rest_state(state)
 
-        # Direct state dispatch without method calls
-        if spark_state == 0:  # IDLE
+    def _update_short_circuit_detection(self, state: EDMState) -> None:
+        """Update short circuit flag based on gap and debris density."""
+        gap = max(0.0, state.workpiece_position - state.wire_position)
+
+        # Get debris density from state (default to 0 if not available)
+        debris_density = getattr(state, "debris_density", 0.0)
+
+        # Use critical debris model for short circuit detection
+        state.is_short_circuit = self._detect_critical_debris_short(gap, debris_density)
+
+    def _handle_idle_state(self, state: EDMState) -> None:
+        """Handle idle state (state 0)."""
+        state.current = 0
+
+        if state.is_short_circuit:
+            # Short circuit during idle → deliver pulse
+            state.spark_status = [-1, None, 0]
+            state.current = self._get_peak_current(state)
+        else:
+            # Normal idle → set voltage and check for ignition
+            state.voltage = self._get_target_voltage(state)
+
+            if self._should_ignite(state):
+                # Start normal spark
+                spark_location = self.env.np_random.uniform(
+                    0, self.env.workpiece_height
+                )
+                state.spark_status = [1, spark_location, 0]
+                state.voltage = self._get_target_voltage(state) * 0.3
+                state.current = self._get_peak_current(state)
+
+    def _handle_spark_state(self, state: EDMState) -> None:
+        """Handle active spark state (state 1)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
+
+        if duration >= self._get_on_time(state):
+            # Spark finished → go to rest
+            state.spark_status[0] = -2
             state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = 0
+        else:
+            # Continue spark
+            state.current = self._get_peak_current(state)
+            if not state.is_short_circuit:
+                state.voltage = self._get_target_voltage(state) * 0.3
 
-            if state.is_short_circuit:
-                # Short circuit during idle → deliver pulse
-                state.spark_status = [-1, None, 0]
-                state.current = self._get_current_from_mode(state.current_mode)
-            else:
-                # Normal idle → set voltage and check for ignition
-                state.voltage = state.target_voltage or 80.0
+    def _handle_short_state(self, state: EDMState) -> None:
+        """Handle short circuit pulse state (state -1)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
 
-                # Optimized ignition check
-                if gap > 0 and self._should_ignite_fast(gap):
-                    # Start normal spark
-                    spark_location = self.env.np_random.uniform(
-                        0, self.env.workpiece_height
-                    )
-                    state.spark_status = [1, spark_location, 0]
-                    state.voltage = (state.target_voltage or 80.0) * 0.3
-                    state.current = self._get_current_from_mode(state.current_mode)
+        if duration >= self._get_on_time(state):
+            # Short pulse finished → go to rest
+            state.spark_status[0] = -2
+            state.current = 0
+        else:
+            # Continue short pulse
+            state.current = self._get_peak_current(state)
 
-        elif spark_state == 1:  # SPARK
-            duration = state.spark_status[2] + 1
-            state.spark_status[2] = duration
+    def _handle_rest_state(self, state: EDMState) -> None:
+        """Handle rest/off state (state -2)."""
+        duration = state.spark_status[2] + 1
+        state.spark_status[2] = duration
 
-            if duration >= self._cached_on_time:
-                # Spark finished → go to rest
-                state.spark_status[0] = -2
-                state.current = 0
-                if not state.is_short_circuit:
-                    state.voltage = 0
-            else:
-                # Continue spark
-                state.current = self._get_current_from_mode(state.current_mode)
-                if not state.is_short_circuit:
-                    state.voltage = (state.target_voltage or 80.0) * 0.3
+        total_cycle_time = self._get_on_time(state) + self._get_off_time(state)
 
-        elif spark_state == -1:  # SHORT
-            duration = state.spark_status[2] + 1
-            state.spark_status[2] = duration
+        if duration >= total_cycle_time:
+            # Rest finished → back to idle
+            state.spark_status = [0, None, 0]
+            state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = self._get_target_voltage(state)
+        else:
+            # Continue rest
+            state.current = 0
+            if not state.is_short_circuit:
+                state.voltage = 0
 
-            if duration >= self._cached_on_time:
-                # Short pulse finished → go to rest
-                state.spark_status[0] = -2
-                state.current = 0
-            else:
-                # Continue short pulse
-                state.current = self._get_current_from_mode(state.current_mode)
+    def _should_ignite(self, state: EDMState) -> bool:
+        """Check if normal ignition should occur."""
+        if state.is_short_circuit:
+            return False
 
-        elif spark_state == -2:  # REST
-            duration = state.spark_status[2] + 1
-            state.spark_status[2] = duration
+        ignition_probability = self.get_lambda(state)
+        return self.env.np_random.random() < ignition_probability
 
-            if duration >= self._cached_total_time:
-                # Rest finished → back to idle
-                state.spark_status = [0, None, 0]
-                state.current = 0
-                if not state.is_short_circuit:
-                    state.voltage = state.target_voltage or 80.0
-            else:
-                # Continue rest
-                state.current = 0
-                if not state.is_short_circuit:
-                    state.voltage = 0
+    def _get_target_voltage(self, state: EDMState) -> float:
+        """Get target voltage with default."""
+        return state.target_voltage or 80.0
 
-    def _should_ignite_fast(self, gap: float) -> bool:
-        """Optimized ignition check with improved caching."""
-        # Convert to integer micrometers for cache key
-        gap_key = int(gap * 10)  # 0.1 micrometer resolution
+    def _get_peak_current(self, state: EDMState) -> float:
+        """Get peak current for current mode."""
+        return self._get_current_from_mode(state.current_mode)
 
-        if gap_key not in self.lambda_cache:
-            # Calculate lambda using optimized formula
-            gap_sq = gap * gap
-            denominator = 0.48 * gap_sq - 3.69 * gap + 14.05
-            self.lambda_cache[gap_key] = self.ln2 / denominator
+    def _get_on_time(self, state: EDMState) -> float:
+        """Get ON time with default."""
+        return state.ON_time or 3
 
-        return self.env.np_random.random() < self.lambda_cache[gap_key]
+    def _get_off_time(self, state: EDMState) -> float:
+        """Get OFF time with default."""
+        return state.OFF_time or 80
 
-    def _update_total_time(self):
-        """Update cached total cycle time."""
-        self._cached_total_time = self._cached_on_time + self._cached_off_time
-
+    # ------------------------------------------------------------------ #
+    # Internals
+    # ------------------------------------------------------------------ #
     def get_lambda(self, state: EDMState) -> float:
-        """Calculate ignition probability based on gap (for compatibility)."""
+        """Calculate ignition probability based on gap."""
         if state.is_short_circuit:
             raise ValueError("get_lambda called during short circuit condition.")
 
         gap = state.workpiece_position - state.wire_position
-        gap_key = int(gap * 10)
 
-        if gap_key not in self.lambda_cache:
-            gap_sq = gap * gap
-            denominator = 0.48 * gap_sq - 3.69 * gap + 14.05
-            self.lambda_cache[gap_key] = self.ln2 / denominator
+        if gap not in self.lambda_cache:
+            self.lambda_cache[gap] = np.log(2) / (0.48 * gap**2 - 3.69 * gap + 14.05)
 
-        return self.lambda_cache[gap_key]
+        return self.lambda_cache[gap]
+
+    def get_critical_density_for_gap(self, gap: float) -> float:
+        """
+        Get the critical debris density for a given gap.
+        Useful for monitoring and debugging.
+        """
+        if gap < self.hard_short_gap:
+            return 0.0  # Any debris density causes short
+
+        critical_density = self.base_critical_density + self.gap_coefficient * gap
+        return min(critical_density, self.max_critical_density)
